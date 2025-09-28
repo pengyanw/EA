@@ -77,7 +77,7 @@ historyBestCost = zeros(maxGen, 1);
 historyAvgCost  = zeros(maxGen, 1);
 historyGen      = 1:maxGen;
 errbuffer       = zeros(maxGen, 1); % Tracks number of unstable individuals
-bestIndividual
+
 %% 5. Main Evolutionary Algorithm Loop (Heavily Modified)
 % =========================================================================
 fprintf('Starting evolution...\n');
