@@ -81,6 +81,7 @@ errbuffer       = zeros(maxGen, 1); % Tracks number of unstable individuals
 %% 5. Main Evolutionary Algorithm Loop (Heavily Modified)
 % =========================================================================
 fprintf('Starting evolution...\n');
+delta_K_norm = []; %record evry round's K norm/ K_
 for iGen = 1:maxGen
     
     costs = zeros(popSize, 1);
@@ -138,7 +139,8 @@ for iGen = 1:maxGen
     keep_indices = sorted_idx(1:min(pop{1}(end), end));
     K_sparse_best = zeros(Nu, Nx);
     K_sparse_best(keep_indices) = best_K(keep_indices);
-
+    
+    delta_K_norm(iGen) = norm(K_sparse-best_K,2)/norm(best_K,2);
     bestIndividual = [pop{1} ];
     bestCost = sortedCosts(1);
     
@@ -236,3 +238,4 @@ if ~exist('figures', 'dir'), mkdir('figures'); end
 saveas(figure(1), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
 saveas(figure(2), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
 saveas(figure(3), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
+fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
