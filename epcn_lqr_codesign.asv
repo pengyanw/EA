@@ -7,7 +7,7 @@ gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 17; 
+seed           = 15; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -133,13 +133,8 @@ for iGen = 1:maxGen
     % --- Selection, Crossover, and Mutation ---
     [sortedCosts, sortedIdx] = sort(costs);
     pop = pop(sortedIdx); % Sort population by fitness
-    best_K = -dlqr(A, B_, diag(pop{1}(1:len_diag_Q)), diag(pop{1}(len_diag_Q + 1 : len_diag_Q + len_diag_R)));
-    [~, sorted_idx] = sort(abs(best_K(:)), 'descend');
-    keep_indices = sorted_idx(1:min(pop{1}(end), end));
-    K_sparse_best = zeros(Nu, Nx);
-    K_sparse_best(keep_indices) = best_K(keep_indices);
-
-    bestIndividual = [pop{1} ];
+    
+    bestIndividual = [pop{1} -dlqr(A, B_, diag(pop{1}(:, R);
     bestCost = sortedCosts(1);
     
     historyBestCost(iGen) = bestCost;
