@@ -21,7 +21,7 @@ function [costs,currK] = cost(currPopBin, currPopCts, A, B_, C_, Q, R_, K_, base
         C = C_(YIdx{i}, :);
         R = R_(UIdx{i}, UIdx{i});
         
-        lqrCost  = get_lqr_cost(A, B, Q, R, K*C) ./ baseCost; % normalized
+        lqrCost  = get_lqr_cost(A, B_, Q, R_, K1) ./ baseCost; % normalized
 
         costs(i) = lqrCost + sensPen*currPopCts{i}(1) + actPen*currPopCts{i}(2) + commPen*nnz(K);        
     end

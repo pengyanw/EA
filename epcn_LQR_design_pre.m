@@ -9,7 +9,7 @@ actDensity     = 1;
 errbuffer = [];
 % Want to pick seeds such that grid is fully connected
 % (Otherwise decentralized; too easy)
-seed = 1; 
+seed = 17; 
 
 % Generate and visualize plants
 numNodes    = gridSize*gridSize;

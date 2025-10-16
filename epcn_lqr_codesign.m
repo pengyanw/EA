@@ -26,10 +26,10 @@ B_ = sys.B2;
 % =========================================================================
 popSize     = 20;      % Population size
 maxGen      = 150;      % Maximum generations
-pMutate     = 0.15;      % Mutation probability for each gene component
+pMutate     = 0.2;      % Mutation probability for each gene component
 pCross      = 0.8;      % Crossover probability
 nTop        = 10;       % Number of top individuals (elites) to keep
-alpha       = 0.5;      % Cost function weighting factor (LQR vs hardware)
+alpha       = 0;      % Cost function weighting factor (LQR vs hardware)
 
 % --- NEW: Parameters for the new gene structure ---
 % The gene is now: [diag(Q) elements, diag(R) elements, num_links]
@@ -53,7 +53,7 @@ R_bm_ = eye(Nu);
 K_bm  = -dlqr(A, B_, Q_bm, R_bm_); % Benchmark dense LQR controller
 costBM = get_lqr_cost(A, B_, Q_bm, R_bm_, K_bm);
 fprintf('Benchmark LQR cost (dense controller): %f\n', costBM);
-cost_bm = alpha*1 + (1-alpha)*nnz(K_bm)/max_links
+cost_bm = cost_EA(A,B_,Q_bm,R_bm_,K_bm, costBM, alpha,max_links)
 %% 4. EA Initialization (Completely Rewritten)
 % =========================================================================
 fprintf('Initializing population...\n');
@@ -77,7 +77,7 @@ historyBestCost = zeros(maxGen, 1);
 historyAvgCost  = zeros(maxGen, 1);
 historyGen      = 1:maxGen;
 errbuffer       = zeros(maxGen, 1); % Tracks number of unstable individuals
-
+popbuffer = [];
 %% 5. Main Evolutionary Algorithm Loop (Heavily Modified)
 % =========================================================================
 fprintf('Starting evolution...\n');
@@ -120,12 +120,9 @@ for iGen = 1:maxGen
             costs(i) = 1e9; % Assign a large penalty for instability
             unstable_count = unstable_count + 1;
         else
-            % Step E: Calculate cost for the stable sparse controller
-            lqr_perf_cost = get_lqr_cost(A, B_, Q_bm, R_bm_, K_sparse);
-            comm_cost = nnz(K_sparse); % Hardware cost is the number of links
             
             % Normalized and weighted final cost
-            costs(i) = alpha * (lqr_perf_cost / costBM) + 5*(1 - alpha) * (comm_cost / max_links);
+            costs(i) = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, max_links);
         end
     end
     
@@ -134,6 +131,7 @@ for iGen = 1:maxGen
     % --- Selection, Crossover, and Mutation ---
     [sortedCosts, sortedIdx] = sort(costs);
     pop = pop(sortedIdx); % Sort population by fitness
+    popbuffer = [popbuffer pop];
     best_K = -dlqr(A, B_, diag(pop{1}(1:len_diag_Q)), diag(pop{1}(len_diag_Q + 1 : len_diag_Q + len_diag_R)));
     [~, sorted_idx] = sort(abs(best_K(:)), 'descend');
     keep_indices = sorted_idx(1:min(pop{1}(end), end));
@@ -197,7 +195,8 @@ end
 [minCost, minIdx] = min(historyBestCost);
 bestGen = historyGen(minIdx);
 costEA = minCost; % Final cost from EA
-
+[res,~,~] = trim_nonzero(K_sparse_best);
+fprintf("Final K:%d\n", res)
 fprintf('\n========== EA Summary ==========\n');
 fprintf('Best cost found: %f at generation %d\n', costEA, bestGen);
 fprintf('best adavntage over benchmark:%d\n', (-costEA+cost_bm)/cost_bm)
@@ -235,7 +234,10 @@ ylim([0 popSize]);
 if ~exist('figures', 'dir'), mkdir('figures'); end
 
 % Save all current figures with gridSize in filename
-saveas(figure(1), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(2), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(3), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
+saveas(figure(2), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(3), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(4), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
 fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
+
+
+save(fullfile('cache', 'popbuffer.mat'), 'popbuffer');
