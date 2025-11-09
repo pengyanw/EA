@@ -7,7 +7,7 @@ gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 17; 
+seed           = 9; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -20,13 +20,15 @@ sys           = generate_grid_plant(actuatedNodes, adjMtx, susceptMtx, inertiasI
 Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
+lamda = 0.1;
+A = A + lamda*eye(size(A));
 B_ = sys.B2;
-
+%B_= B_ + 1e-1*randn(size(B_));
 %% 2. EA Parameters (Updated for the new strategy)
 % =========================================================================
 popSize     = 20;      % Population size
 maxGen      = 150;      % Maximum generations
-pMutate     = 0.1;      % Mutation probability for each gene component
+pMutate     = 0.05;      % Mutation probability for each gene component
 pCross      = 0.8;      % Crossover probability
 nTop        = 10;       % Number of top individuals (elites) to keep
 alpha       = 0;      % Cost function weighting factor (LQR vs hardware)
@@ -57,7 +59,12 @@ R_bm_ = eye(Nu);
 K_bm  = -dlqr(A, B_, Q_bm, R_bm_); % Benchmark dense LQR controller
 costBM = get_lqr_cost(A, B_, Q_bm, R_bm_, K_bm);
 fprintf('Benchmark LQR cost (dense controller): %f\n', costBM);
-cost_bm = cost_EA(A,B_,Q_bm,R_bm_,K_bm, costBM, alpha,max_links)
+
+% Benchmark: semi-truncated K
+KSuppBM     = abs(K_bm) > 1e-2;
+K1          = zeros(size(K_bm));
+K1(KSuppBM) = K_bm(KSuppBM);
+cost_bm     = cost_EA(A, B_, Q_bm, R_bm_, K1, costBM, alpha)
 %% 4. EA Initialization (Completely Rewritten)
 % =========================================================================
 fprintf('Initializing population...\n');
@@ -191,7 +198,7 @@ for iGen = 1:maxGen
             crossPoint = randi(geneLength - 1);
             child = [parent1(1:crossPoint), parent2(crossPoint+1:end)];
         else
-            child = [parent2(1:crossPoint), parent1(crossPoint+1:end)];
+            child = parent1;
         end
 
         % Mutation (continuous parts)
@@ -272,6 +279,6 @@ saveas(figure(2), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed
 saveas(figure(3), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
 fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
 [res,~,~] = trim_nonzero(K_sparse_best);
-fprintf("Final K:%d\n", res)
+
 
 save(fullfile('cache', 'popbuffer.mat'), 'popbuffer');

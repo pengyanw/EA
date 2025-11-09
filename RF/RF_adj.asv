@@ -1,0 +1,122 @@
+%% Random Forest training for K importance (simplified features)
+clear; clc; close all;
+addpath(genpath(pwd));
+
+%% ========================= 1. Parameters ================================
+numSamples   = 200;       % number of training systems
+gridSize     = 4;         % grid size
+connectThresh= 0.5;
+Ts           = 0.2;
+actDensity   = 1.0;
+QscaleRange  = [0.1, 5];
+RscaleRange  = [0.1, 5];
+
+fprintf('Generating %d training samples...\n', numSamples);
+
+%% ========================= 2. Data Buffers ==============================
+X_all = [];
+Y_all = [];
+
+%% ========================= 3. Generate Random Systems ===================
+for k = 1:numSamples
+    rng(k);
+    % --- generate topology & plant
+    [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = ...
+        generate_grid_topology(gridSize, connectThresh, k);
+    numNodes = gridSize^2;
+    numActs  = round(actDensity * numNodes);
+    actNodes = randsample(numNodes, numActs);
+    sys = generate_grid_plant(actNodes, adjMtx, susceptMtx, inertiasInv, dampings, Ts);
+    A = sys.A; B = sys.B2;
+    Nx = sys.Nx; Nu = sys.Nu;
+
+    % --- random Q,R
+    diagQ = QscaleRange(1) + diff(QscaleRange)*rand(1,Nx);
+    diagR = RscaleRange(1) + diff(RscaleRange)*rand(1,Nu);
+    Q = diag(diagQ);
+    R = diag(diagR);
+
+    % --- dense LQR controller
+    try
+        K_dense = -dlqr(A,B,Q,R);
+    catch
+        continue;
+    end
+
+    % --- distance matrix
+    G = graph(adjMtx);
+    D = distances(G);
+    D(isinf(D)) = max(D(~isinf(D)))+1;
+    D_expanded = kron(D, ones(1, Nx/numNodes)); % match K dimension
+
+    % --- global norms of A, B
+    normA = norm(A,'fro');
+    normB = norm(B,'fro');
+
+    % --- feature and label vectors
+    feat_d = D_expanded(:);
+    feat_normA = normA*ones(numel(feat_d),1);
+    feat_normB = normB*ones(numel(feat_d),1);
+
+    X = [feat_d, feat_normA, feat_normB];
+    Y = abs(K_dense(:));
+
+    X_all = [X_all X];
+    Y_all = [Y_all Y];
+end
+
+fprintf('Total pairs collected: %d\n', size(X_all,1));
+
+%% ========================= 4. Train Random Forest =======================
+numTrees = 120;
+fprintf('Training Random Forest Regressor...\n');
+rfModel = TreeBagger(numTrees, X_all, Y_all, ...
+    'Method','regression', ...
+    'OOBPrediction','on', ...
+    'OOBPredictorImportance','on');
+
+%% ========================= 5. Evaluate Model ============================
+Y_pred = oobPredict(rfModel);
+mse_val = mean((Y_all - Y_pred).^2);
+fprintf('OOB MSE = %.4e\n', mse_val);
+
+figure;
+bar(rfModel.OOBPermutedPredictorDeltaError);
+xticklabels({'d(i,j)','||A||_F','||B||_F'});
+xlabel('Feature');
+ylabel('Importance');
+title('Random Forest Feature Importance (Simplified)');
+grid on;
+
+%% ========================= 6. Save Model ================================
+if ~exist('cache','dir'), mkdir('cache'); end
+save('cache/rf_Kimportance_simple.mat','rfModel','X_all','Y_all');
+
+%% ========================= 7. Predict on new graph ======================
+fprintf('Testing on a new graph...\n');
+seed = 888; rng(seed);
+[adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = ...
+    generate_grid_topology(gridSize, connectThresh, seed);
+numNodes = gridSize^2;
+actNodes = randsample(numNodes, numActs);
+sys = generate_grid_plant(actNodes, adjMtx, susceptMtx, inertiasInv, dampings, Ts);
+A = sys.A; B = sys.B2; Nx = sys.Nx; Nu = sys.Nu;
+
+G = graph(adjMtx);
+D = distances(G);
+D(isinf(D)) = max(D(~isinf(D)))+1;
+D_expanded = kron(D, ones(1, Nx/numNodes));
+normA = norm(A,'fro');
+normB = norm(B,'fro');
+feat_d = D_expanded(:);
+feat_normA = normA*ones(numel(feat_d),1);
+feat_normB = normB*ones(numel(feat_d),1);
+X_new = [feat_d, feat_normA, feat_normB];
+
+Y_pred_new = predict(rfModel, X_new);
+K_pred = reshape(Y_pred_new, [Nu, Nx]);
+
+figure;
+imagesc(K_pred); colorbar;
+xlabel('State index'); ylabel('Actuator index');
+title('Predicted |K| Importance by RF (Simplified features)');

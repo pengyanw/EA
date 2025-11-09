@@ -9,7 +9,7 @@ actDensity     = 1;
 errbuffer = [];
 % Want to pick seeds such that grid is fully connected
 % (Otherwise decentralized; too easy)
-seed = 17; 
+seed = 6; 
 
 % Generate and visualize plants
 numNodes    = gridSize*gridSize;
@@ -26,8 +26,10 @@ Nu = sys.Nu;
 
 specRadEA = 1; 
 A  = sys.A*specRadEA;
+lamda = 0.1;
+A = A + lamda*eye(size(A));
 B_ = sys.B2;
-
+B_= B_ + 1e-1*randn(size(B_));
 % [A,B_] = generate_random_sys_L_alpha_stable(Nx,Nu,alpha)
 % [A,B_] = generate_random_sys(Nx,Nu)
 

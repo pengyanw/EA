@@ -7,7 +7,7 @@ gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 17; 
+seed           = 5; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -20,13 +20,37 @@ sys           = generate_grid_plant(actuatedNodes, adjMtx, susceptMtx, inertiasI
 Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
+lamda = 0.1;
+%A = A + lamda*eye(size(A));
 B_ = sys.B2;
+%B_= B_ + 1e-1*randn(size(B_));
+%% compute the graph properties
+% min distance
+G = graph(adjMtx);
+D = distances(G);           % Nnode x Nnode, D(i,j)=最短跳数
+D(isinf(D)) = max(D(~isinf(D)))+1;  % 断开分量用大值兜底
+n_s = 2;                          % 每格点状态数（按你的模型）
+
+n_s  = Nx/ Nu;
+D_for_K = kron(D, ones(1, n_s));  % Nu x Nx
+use_gaussian = false;   % false 则用 exp(-beta*d)
+sigma  = 1.5;          % 高斯核带宽
+beta   = 0.7;          % 指数核衰减系数（备选）
+w_min  = 0.0;          % 门控下限（可设 0 ~ 0.2 之间）
+
+if use_gaussian
+    W = exp(-(D_for_K./sigma).^2);
+else
+    W = exp(-beta * D_for_K);
+end
+W = max(W, w_min);
+
 
 %% 2. EA Parameters (Updated for the new strategy)
 % =========================================================================
 popSize     = 20;      % Population size
 maxGen      = 150;      % Maximum generations
-pMutate     = 0.2;      % Mutation probability for each gene component
+pMutate     = 0.1;      % Mutation probability for each gene component
 pCross      = 0.8;      % Crossover probability
 nTop        = 10;       % Number of top individuals (elites) to keep
 alpha       = 0;      % Cost function weighting factor (LQR vs hardware)
@@ -53,7 +77,12 @@ R_bm_ = eye(Nu);
 K_bm  = -dlqr(A, B_, Q_bm, R_bm_); % Benchmark dense LQR controller
 costBM = get_lqr_cost(A, B_, Q_bm, R_bm_, K_bm);
 fprintf('Benchmark LQR cost (dense controller): %f\n', costBM);
-cost_bm = cost_EA(A,B_,Q_bm,R_bm_,K_bm, costBM, alpha,max_links)
+
+% Benchmark: semi-truncated K
+KSuppBM     = abs(K_bm) > 1e-2;
+K1          = zeros(size(K_bm));
+K1(KSuppBM) = K_bm(KSuppBM);
+cost_bm     = cost_EA(A, B_, Q_bm, R_bm_, K1, costBM, alpha)
 %% 4. EA Initialization (Completely Rewritten)
 % =========================================================================
 fprintf('Initializing population...\n');
@@ -66,7 +95,7 @@ for i = 1:popSize
     diag_R = (max_R_val - min_R_val) * rand(1, len_diag_R) + min_R_val;
     
     % Gene part 3: Number of communication links
-    num_links = randi([min_links, max_links]);
+    num_links = randi([min_links, nnz(KSuppBM)]);
     
     % Combine to form the chromosome
     pop{i} = [diag_Q, diag_R, num_links];
@@ -78,6 +107,7 @@ historyAvgCost  = zeros(maxGen, 1);
 historyGen      = 1:maxGen;
 errbuffer       = zeros(maxGen, 1); % Tracks number of unstable individuals
 popbuffer = [];
+flag = [];
 %% 5. Main Evolutionary Algorithm Loop (Heavily Modified)
 % =========================================================================
 fprintf('Starting evolution...\n');
@@ -113,8 +143,19 @@ for iGen = 1:maxGen
         K_sparse = zeros(Nu, Nx);
         [~, sorted_idx] = sort(abs(K_dense(:)), 'descend');
         keep_indices = sorted_idx(1:min(num_links, end));
-        K_sparse(keep_indices) = K_dense(keep_indices);
+       
         
+        % 调用高斯核门控函数（已在循环前算好 W）
+        [K_sparse, isStable] = apply_kernel_gate(K_dense, num_links, W, A, B_);
+        
+        if ~isStable
+            costs(i) = 1e9;
+            unstable_count = unstable_count + 1;
+        else
+            costs(i) = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, Nu*Nx);
+            flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
+        end
+
         % Step D: Check stability of the sparse controller
         if max(abs(eig(A + B_ * K_sparse))) >= 1.0
             costs(i) = 1e9; % Assign a large penalty for instability
@@ -123,6 +164,7 @@ for iGen = 1:maxGen
             
             % Normalized and weighted final cost
             costs(i) = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, max_links);
+            flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
         end
     end
     

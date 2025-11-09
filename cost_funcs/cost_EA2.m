@@ -1,4 +1,4 @@
-function J_total = cost_EA(A, B, Q, R, K_sparse, costBM, alpha, max_links)
+function J_total = cost_EA2(A, B, Q, R, K_sparse, costBM, alpha, ~)
 % COST_EA  Compute the evolutionary algorithm cost for a given controller.
 %
 % Usage:
@@ -55,7 +55,7 @@ active_cols = nnz(any(K_sparse,1)); % active sensors
 
 % ----------- Step 4: Weighted total cost -----------
 % Adjust the weights here depending on your preference
-w_comm = 0.05*(1 - alpha);
+w_comm = 0.2*(1 - alpha);
 w_row  = 0.4*(1 - alpha);
 w_col  = 0.2*(1 - alpha);
 
