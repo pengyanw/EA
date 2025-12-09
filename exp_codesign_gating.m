@@ -1,14 +1,13 @@
 clear; clc;
 addpath(genpath(pwd));  
 close all
-%EA with row&columns masks and element mask
 %% 1. System Generation (No changes here)
 % =========================================================================
 gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 10; 
+seed           = 5; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -21,29 +20,51 @@ sys           = generate_grid_plant(actuatedNodes, adjMtx, susceptMtx, inertiasI
 Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
-lamda = 0.1;
-%A = A + lamda*eye(size(A)); testing stability
+lamda = 0.2;
+%A = A + lamda*eye(size(A));
 B_ = sys.B2;
 %B_= B_ + 1e-1*randn(size(B_));
+%% compute the graph properties
+% min distance
+G = graph(adjMtx);
+D = distances(G);           % Nnode x Nnode, D(i,j)
+D(isinf(D)) = max(D(~isinf(D)))+1;  % 
+n_s = 2;                          % # of states
+
+n_s  = Nx/ Nu;
+D_for_K = kron(D, ones(1, n_s));  % Nu x Nx
+use_gaussian = false;   % false : exp(-beta*d)
+sigma  = 1.5;          % bandwidth of G kernel
+beta   = 0.7;          % decaying factor
+w_min  = 0.0;          % 门控下限（可设 0 ~ 0.2 之间）
+
+modelFile = 'cache/rf_Kimportance_simple.mat';
+K_map = predict_K_importance(A, B_, adjMtx, modelFile);
+
+imagesc(K_map); colorbar; title('Predicted K importance');
+if use_gaussian
+    W = exp(-(D_for_K./sigma).^2);
+else
+    W = exp(-beta * D_for_K);
+end
+W = max(W, w_min);
+
+
 %% 2. EA Parameters (Updated for the new strategy)
 % =========================================================================
 popSize     = 20;      % Population size
-maxGen      = 150;      % Maximum generations
-pMutate     = 0.05;      % Mutation probability for each gene component
+maxGen      = 50;      % Maximum generations
+pMutate     = 0.1;      % Mutation probability for each gene component
 pCross      = 0.8;      % Crossover probability
 nTop        = 10;       % Number of top individuals (elites) to keep
 alpha       = 0;      % Cost function weighting factor (LQR vs hardware)
 
 % --- NEW: Parameters for the new gene structure ---
 % The gene is now: [diag(Q) elements, diag(R) elements, num_links]
-% --- NEW: Extended Gene Structure ---
 len_diag_Q    = Nx;
 len_diag_R    = Nu;
 len_num_links = 1;
-len_act_bin   = Nu;
-len_sens_bin  = Nx;
-geneLength    = len_diag_Q + len_diag_R + len_num_links + len_act_bin + len_sens_bin;
-
+geneLength    = len_diag_Q + len_diag_R + len_num_links;
 
 % --- NEW: Bounds for gene values ---
 max_Q_val   = 10;   % Max value for a diagonal element of Q
@@ -71,23 +92,18 @@ cost_bm     = cost_EA(A, B_, Q_bm, R_bm_, K1, costBM, alpha)
 fprintf('Initializing population...\n');
 pop = cell(popSize, 1);
 for i = 1:popSize
-    % Part 1: Diagonal Q
+    % Gene part 1: Diagonal elements of Q
     diag_Q = (max_Q_val - min_Q_val) * rand(1, len_diag_Q) + min_Q_val;
     
-    % Part 2: Diagonal R
+    % Gene part 2: Diagonal elements of R
     diag_R = (max_R_val - min_R_val) * rand(1, len_diag_R) + min_R_val;
     
-    % Part 3: Communication link count
-    num_links = randi([min_links, max_links]);
+    % Gene part 3: Number of communication links
+    num_links = randi([min_links, nnz(KSuppBM)]);
     
-    % Part 4: Actuator and Sensor binary masks
-    act_bin  = double(rand(1, len_act_bin)  > 0.01);
-    sens_bin = double(rand(1, len_sens_bin) > 0.01);
-
-    % Combine into full gene
-    pop{i} = [diag_Q, diag_R, num_links, act_bin, sens_bin];
+    % Combine to form the chromosome
+    pop{i} = [diag_Q, diag_R, num_links];
 end
-
 
 % History tracking
 historyBestCost = zeros(maxGen, 1);
@@ -95,105 +111,101 @@ historyAvgCost  = zeros(maxGen, 1);
 historyGen      = 1:maxGen;
 errbuffer       = zeros(maxGen, 1); % Tracks number of unstable individuals
 popbuffer = [];
-flag=  []; %validate the theoretical bound 
-%% 5. Main Evolutionary Algorithm Loop (Updated with bin+cts structure)
+flag = [];
+%% 5. Main Evolutionary Algorithm Loop (Heavily Modified)
 % =========================================================================
 fprintf('Starting evolution...\n');
-delta_K_norm = []; % Record K change ratio
-
+delta_K_norm = []; %record evry round's K norm/ K_
 for iGen = 1:maxGen
+    
     costs = zeros(popSize, 1);
     unstable_count = 0;
-    cts = cell(popSize, 1);  % store [active_rows, active_cols] for each individual
     
     % --- Fitness Evaluation ---
     for i = 1:popSize
         gene = pop{i};
-
-        % Step A: Decode gene parts
+        
+        % Step A: Decode gene into Q, R, and num_links
         diag_Q    = gene(1:len_diag_Q);
         diag_R    = gene(len_diag_Q + 1 : len_diag_Q + len_diag_R);
-        num_links = round(gene(len_diag_Q + len_diag_R + 1));
-
-        act_bin   = logical(gene(len_diag_Q + len_diag_R + len_num_links + (1:len_act_bin)));
-        sens_bin  = logical(gene(end - len_sens_bin + 1:end));
-
+        num_links = round(gene(end)); % Ensure it's an integer
+        
         Q = diag(diag_Q);
         R = diag(diag_R);
-
-        % Step B: Compute dense controller
+        
+        % Step B: Solve for the dense, stable controller K_dense
+        % Use a try-catch block in case dlqr fails (e.g., if R is not pos-def)
         try
             K_dense = -dlqr(A, B_, Q, R);
         catch
-            costs(i) = 1e12;
+            costs(i) = 1e12; % Assign a massive penalty if dlqr fails
             unstable_count = unstable_count + 1;
-            cts{i} = [0 0];
             continue;
         end
-
-        % Step C: Sparsify K_dense by strongest |K| elements
+        
+        % Step C: Sparsify K_dense
         K_sparse = zeros(Nu, Nx);
-        [~, sorted_idx] = sort(abs(K_dense(:)), 'descend');
-        keep_idx = sorted_idx(1:min(num_links, end));
-        K_sparse(keep_idx) = K_dense(keep_idx);
-
-        % Step D: Apply actuator/sensor binary masks
-        K_sparse(~act_bin, :) = 0;   % deactivate rows (actuators)
-        K_sparse(:, ~sens_bin) = 0;  % deactivate cols (sensors)
-
-        % Step E: Compute cost using external cost_EA()
-        J = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, max_links);
-        costs(i) = J;
-        flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
-        % Step F: Count active structure
-        active_rows = nnz(any(K_sparse,2));
-        active_cols = nnz(any(K_sparse,1));
-        cts{i} = [active_rows, active_cols];
-
-        if J >= 1e9
+        % [~, sorted_idx] = sort(abs(K_dense(:)), 'descend');
+        % keep_indices = sorted_idx(1:min(num_links, end));
+        % K_sparse(keep_indices) = K_dense(keep_indices);
+        
+        % 调用高斯核门控函数（已在循环前算好 W）
+        [K_sparse, isStable] = apply_kernel_gate(K_dense, num_links, W, A, B_);
+        
+        if ~isStable
+            costs(i) = 1e9;
             unstable_count = unstable_count + 1;
+        else
+            costs(i) = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, Nu*Nx);
+            flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
+        end
+
+        % Step D: Check stability of the sparse controller
+        if max(abs(eig(A + B_ * K_sparse))) >= 1.0
+            costs(i) = 1e9; % Assign a large penalty for instability
+            unstable_count = unstable_count + 1;
+        else
+            
+            % Normalized and weighted final cost
+            costs(i) = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, max_links);
+            flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
         end
     end
-
+    
     errbuffer(iGen) = unstable_count;
-    %save(fullfile('cache', sprintf('cts_gen_%03d.mat', iGen)), 'cts');
-
+    
     % --- Selection, Crossover, and Mutation ---
     [sortedCosts, sortedIdx] = sort(costs);
-    pop = pop(sortedIdx); % sort by fitness
+    pop = pop(sortedIdx); % Sort population by fitness
     popbuffer = [popbuffer pop];
-
-    bestCost = sortedCosts(1);
-    historyBestCost(iGen) = bestCost;
-    historyAvgCost(iGen)  = mean(costs(costs < 1e9));
-    fprintf('Gen %d: Best Cost=%.4f, Avg=%.4f, Unstable=%d/%d\n', ...
-        iGen, bestCost, historyAvgCost(iGen), unstable_count, popSize);
-
-    % Compute best controller of this generation
-    bestGene = pop{1};
-    diag_Q_best = bestGene(1:len_diag_Q);
-    diag_R_best = bestGene(len_diag_Q + 1 : len_diag_Q + len_diag_R);
-    Q_best = diag(diag_Q_best);
-    R_best = diag(diag_R_best);
-    best_K_dense = -dlqr(A, B_, Q_best, R_best);
-    [~, sorted_idx] = sort(abs(best_K_dense(:)), 'descend');
-    keep_idx = sorted_idx(1:min(bestGene(len_diag_Q + len_diag_R + 1), end));
+    best_K = -dlqr(A, B_, diag(pop{1}(1:len_diag_Q)), diag(pop{1}(len_diag_Q + 1 : len_diag_Q + len_diag_R)));
+    [~, sorted_idx] = sort(abs(best_K(:)), 'descend');
+    keep_indices = sorted_idx(1:min(pop{1}(end), end));
     K_sparse_best = zeros(Nu, Nx);
-    K_sparse_best(keep_idx) = best_K_dense(keep_idx);
-    K_sparse_best(~logical(bestGene(len_diag_Q + len_diag_R + len_num_links + (1:len_act_bin))), :) = 0;
-    K_sparse_best(:, ~logical(bestGene(end - len_sens_bin + 1:end))) = 0;
-
-    delta_K_norm(iGen) = norm(K_sparse_best-best_K_dense, 2) / (norm(best_K_dense, 2) + eps);
-
-    % --- Create the next generation ---
+    K_sparse_best(keep_indices) = best_K(keep_indices);
+    
+    delta_K_norm(iGen) = norm(K_sparse-best_K,2)/norm(best_K,2);
+    bestIndividual = [pop{1} ];
+    bestCost = sortedCosts(1);
+    
+    historyBestCost(iGen) = bestCost;
+    historyAvgCost(iGen)  = mean(costs(costs < 1e9)); % Avg cost of stable solutions
+    
+    fprintf('Gen %d: Best Cost=%.4f, Avg Cost=%.4f, Unstable=%d/%d\n', ...
+            iGen, bestCost, historyAvgCost(iGen), unstable_count, popSize);
+    
+    % Create the next generation
     newPop = cell(popSize, 1);
-    newPop(1:nTop) = pop(1:nTop); % elitism
-
-    for i = (nTop+1):popSize
-        % Parent selection
-        parent1 = pop{randi(popSize)};
+    
+    % Elitism: Keep the top individuals
+    newPop(1:nTop) = pop(1:nTop);
+    
+    % Fill the rest of the population
+    for i = (nTop + 1):popSize
+        % Select parents (e.g., tournament selection or roulette wheel)
+        parent1 = pop{randi(popSize)}; 
         parent2 = pop{randi(popSize)};
-
+        
         % Crossover
         if rand < pCross
             crossPoint = randi(geneLength - 1);
@@ -201,43 +213,36 @@ for iGen = 1:maxGen
         else
             child = parent1;
         end
-
-        % Mutation (continuous parts)
-        for j = 1:(len_diag_Q + len_diag_R + len_num_links)
+        
+        % Mutation
+        for j = 1:(geneLength - 1) % Mutate Q and R elements
             if rand < pMutate
+                % Add Gaussian noise
                 child(j) = child(j) + randn * 0.1 * (max_Q_val - min_Q_val);
+                % Enforce bounds
+                child(j) = max(min(child(j), max_Q_val), min_Q_val);
             end
+        end
+        % Mutate num_links separately
+        if rand < pMutate
+            child(end) = child(end) + randi([-5, 5]); % Small integer change
+            % Enforce bounds
+            child(end) = max(min(child(end), max_links), min_links);
         end
         
-        % Bound enforcement
-        child(1:len_diag_Q) = min(max(child(1:len_diag_Q), min_Q_val), max_Q_val);
-        child(len_diag_Q+1 : len_diag_Q+len_diag_R) = ...
-            min(max(child(len_diag_Q+1 : len_diag_Q+len_diag_R), min_R_val), max_R_val);
-        child(len_diag_Q+len_diag_R+1) = ...
-            min(max(round(child(len_diag_Q+len_diag_R+1)), min_links), max_links);
-
-        % Mutation for binary parts
-        for j = (len_diag_Q + len_diag_R + len_num_links + 1):geneLength
-            if rand < pMutate
-                child(j) = 1 - child(j);
-            end
-        end
-
         newPop{i} = child;
     end
-
+    
     pop = newPop;
 end
 
-
-
 %% 6. Results and Plotting (Updated for clarity)
-close all
 % =========================================================================
 [minCost, minIdx] = min(historyBestCost);
 bestGen = historyGen(minIdx);
 costEA = minCost; % Final cost from EA
-
+[res,~,~] = trim_nonzero(K_sparse_best);
+fprintf("Final K:%d\n", res)
 fprintf('\n========== EA Summary ==========\n');
 fprintf('Best cost found: %f at generation %d\n', costEA, bestGen);
 fprintf('best adavntage over benchmark:%d\n', (-costEA+cost_bm)/cost_bm)
@@ -275,11 +280,14 @@ ylim([0 popSize]);
 if ~exist('figures', 'dir'), mkdir('figures'); end
 
 % Save all current figures with gridSize in filename
-saveas(figure(1), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(2), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(3), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
+saveas(figure(2), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(3), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(4), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
 fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
-[res,~,~] = trim_nonzero(K_sparse_best);
 
 
 save(fullfile('cache', 'popbuffer.mat'), 'popbuffer');
+%% 
+[K_refined, refine_history] = post_refine_K(A, B_, Q_bm, R_bm_, adjMtx, K_sparse_best, 150);
+
+

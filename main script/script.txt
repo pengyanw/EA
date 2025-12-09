@@ -1,14 +1,13 @@
 clear; clc;
 addpath(genpath(pwd));  
 close all
-%EA with row&columns masks and element mask
 %% 1. System Generation (No changes here)
 % =========================================================================
 gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 10; 
+seed           = 5; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -22,7 +21,7 @@ Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
 lamda = 0.1;
-%A = A + lamda*eye(size(A)); testing stability
+%A = A + lamda*eye(size(A));
 B_ = sys.B2;
 %B_= B_ + 1e-1*randn(size(B_));
 %% 2. EA Parameters (Updated for the new strategy)

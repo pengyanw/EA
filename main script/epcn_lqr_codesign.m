@@ -21,7 +21,7 @@ Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
 lamda = 0.1;
-A = A + lamda*eye(size(A));
+%A = A + lamda*eye(size(A));
 B_ = sys.B2;
 %B_= B_ + 1e-1*randn(size(B_));
 %% compute the graph properties
@@ -265,9 +265,9 @@ ylim([0 popSize]);
 if ~exist('figures', 'dir'), mkdir('figures'); end
 
 % Save all current figures with gridSize in filename
-saveas(figure(2), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(3), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(4), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
+saveas(figure(2), sprintf('figures_week9/old_evo_bestcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(3), sprintf('figures_week9/old_evo_avgcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(4), sprintf('figures_week9/old_unstable_count_grid%dseed%d.png', gridSize, seed));
 fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
 
 

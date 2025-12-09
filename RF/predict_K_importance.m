@@ -1,41 +1,46 @@
-function K_importance = predict_K_importance(A, B, adjMtx, modelPath)
-% predict_K_importance - Predicts K element-wise importance using trained RF
-%
-% Inputs:
-%   A        - System state matrix (Nx × Nx)
-%   B        - Input matrix (Nx × Nu)
-%   adjMtx   - Adjacency matrix of the graph (Nnode × Nnode)
-%   modelPath - Full path to the trained TreeBagger .mat file
-%
-% Output:
-%   K_importance - Predicted importance matrix (Nu × Nx)
+function K_map = predict_K_importance(A, B, adjMtx, modelFile)
+% Predict |K| importance map for a new system using trained RF model
 
-    % --- Load model ---
-    data = load(modelPath);
-    rfModel = data.rfModel;
+% Load RF model
+loaded = load(modelFile, 'rfModel');
+rfModel = loaded.rfModel;
 
-    % --- Dimensions ---
-    [Nx, Nu] = size(B);
+% Dimensions
+[Nx, Nu] = size(B);
+numNodes = size(adjMtx, 1);
+assert(mod(Nx,numNodes)==0 && mod(Nu,numNodes)==0, 'Nx/Nu not divisible by #nodes');
 
-    % --- Feature Construction ---
-    feat_d      = reshape(adjMtx, 1, []);  % vectorized distances
-    feat_colA   = sum(abs(A), 1);          % column norm of A
-    feat_diagA  = diag(A)';                % A diagonals
-    feat_bPow   = sum(B.^2, 1);            % actuator strength
-    feat_align  = dot(B, A, 1);            % alignment feature
+nodePerAct  = Nu / numNodes;
+nodePerState = Nx / numNodes;
 
-    % --- Repeat and align features for all (i,j) pairs ---
-    feat_mat = [];
-    for i = 1:Nu
-        for j = 1:Nx
-            dij = adjMtx(i,j);                  % distance between actuator i and state j
-            feat_entry = [dij, feat_colA(j), feat_diagA(j), feat_bPow(i), feat_align(i)];
-            feat_mat = [feat_mat; feat_entry];  % one row per K(i,j)
-        end
-    end
+% --- Distance Matrix Expansion ---
+G = graph(adjMtx);
+D_node = distances(G);
+D_node(isinf(D_node)) = max(D_node(~isinf(D_node))) + 1;
+D_exp = kron(D_node, ones(nodePerAct, nodePerState));  % Nu × Nx
 
-    % --- Predict using RF model ---
-    pred_vec = predict(rfModel, feat_mat);  % (Nu*Nx × 1)
-    K_importance = reshape(pred_vec, Nu, Nx);
+% --- Global norms ---
+normA = norm(A, 'fro');
+normB = norm(B, 'fro');
+
+% --- Local AB features ---
+colA  = sum(abs(A), 1)';      % Nx × 1
+diagA = abs(diag(A));         % Nx × 1
+bPow  = vecnorm(B, 2, 1)';    % Nu × 1
+Galign = abs(B' * A);         % Nu × Nx
+
+% --- Assemble features ---
+[II, JJ] = ndgrid(1:Nu, 1:Nx);  % actuator-state pairs
+feat_d      = D_exp(:);
+feat_colA   = colA(JJ(:));
+feat_diagA  = diagA(JJ(:));
+feat_bPow   = bPow(II(:));
+feat_align  = Galign(:);
+
+X_pred = [feat_d, feat_colA, feat_diagA, feat_bPow, feat_align];
+
+% --- Predict
+Y_pred = predict(rfModel, X_pred);    % length = Nu*Nx
+K_map = reshape(Y_pred, Nu, Nx);      % Nu × Nx
 
 end

@@ -39,6 +39,7 @@ for k = 1:numSamples
     % --- dense LQR controller
     try
         K_dense = -dlqr(A,B,Q,R);
+        K_dense(K_dense>1e-3) = 0;
     catch
         continue;
     end

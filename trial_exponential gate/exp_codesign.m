@@ -3,7 +3,7 @@ addpath(genpath(pwd));
 close all
 %% 1. System Generation (No changes here)
 % =========================================================================
-gridSize       = 5;
+gridSize       = 6;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
@@ -27,23 +27,28 @@ B_ = sys.B2;
 %% compute the graph properties
 % min distance
 G = graph(adjMtx);
-D = distances(G);           % Nnode x Nnode, D(i,j)=最短跳数
-D(isinf(D)) = max(D(~isinf(D)))+1;  % 断开分量用大值兜底
-n_s = 2;                          % 每格点状态数（按你的模型）
+D = distances(G);           % Nnode x Nnode, D(i,j)
+D(isinf(D)) = max(D(~isinf(D)))+1;  % 
+n_s = 2;                          % # of states
 
 n_s  = Nx/ Nu;
 D_for_K = kron(D, ones(1, n_s));  % Nu x Nx
-use_gaussian = false;   % false 则用 exp(-beta*d)
-sigma  = 1.5;          % 高斯核带宽
-beta   = 0.7;          % 指数核衰减系数（备选）
+use_gaussian = true;   % false : exp(-beta*d)
+sigma  = 1.5;          % bandwidth of G kernel
+beta   = 0.7;          % decaying factor
 w_min  = 0.0;          % 门控下限（可设 0 ~ 0.2 之间）
 
-if use_gaussian
-    W = exp(-(D_for_K./sigma).^2);
-else
-    W = exp(-beta * D_for_K);
-end
-W = max(W, w_min);
+modelFile = 'cache/rf_Kimportance_simple.mat';
+K_map = predict_K_importance(A, B_, adjMtx, modelFile);
+
+imagesc(K_map); colorbar; title('Predicted K importance');
+% if use_gaussian
+%     W = exp(-(D_for_K./sigma).^2);
+% else
+%     W = exp(-beta * D_for_K);
+% end
+% W = max(W, w_min);
+W = K_map;
 
 
 %% 2. EA Parameters (Updated for the new strategy)
@@ -273,12 +278,12 @@ grid on;
 ylim([0 popSize]);
 
 % Ensure output folder exists
-if ~exist('figures', 'dir'), mkdir('figures'); end
+if ~exist('figures_week9', 'dir'), mkdir('figures_week9'); end
 
 % Save all current figures with gridSize in filename
-saveas(figure(2), sprintf('figures/evo_bestcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(3), sprintf('figures/evo_avgcost_grid%dseed%d.png', gridSize, seed));
-saveas(figure(4), sprintf('figures/unstable_count_grid%dseed%d.png', gridSize, seed));
+saveas(figure(2), sprintf('figures_week9/evo_bestcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(3), sprintf('figures_week9/evo_avgcost_grid%dseed%d.png', gridSize, seed));
+saveas(figure(4), sprintf('figures_week9/unstable_count_grid%dseed%d.png', gridSize, seed));
 fprintf("max deltaK/K condition number=%d", max(delta_K_norm))
 
 
