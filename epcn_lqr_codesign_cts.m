@@ -1,15 +1,14 @@
 clear; clc;
 addpath(genpath(pwd));  
 close all
-
-
+%EA with row&columns masks and element mask
 %% 1. System Generation (No changes here)
 % =========================================================================
 gridSize       = 5;
 connectThresh  = 0.5;
 Ts             = 0.2;
 actDensity     = 1;
-seed           = 5; 
+seed           = 10; 
 
 numNodes    = gridSize*gridSize;
 [adjMtx, nodeCoords, susceptMtx, inertiasInv, dampings] = generate_grid_topology(gridSize, connectThresh, seed);
@@ -23,35 +22,9 @@ Nx = sys.Nx;
 Nu = sys.Nu;
 A  = sys.A;
 lamda = 0.1;
-%A = A + lamda*eye(size(A));
+%A = A + lamda*eye(size(A)); testing stability
 B_ = sys.B2;
 %B_= B_ + 1e-1*randn(size(B_));
-% === RL agent init (do this once near the top of script) ===
-Nu = size(B_, 2);
-Nx = size(A, 1);
-state_dim = 5;        % 与 extract_state_features 保持一致
-rng(42);              % 固定随机种子（可改）
-
-agent = init_rl_agent(Nu, Nx, state_dim);
-
-%% compute the graph properties
-G = graph(adjMtx);
-D = distances(G);
-D(isinf(D)) = max(D(~isinf(D))) + 1;
-
-n_s  = Nx / Nu;
-D_for_K = kron(D, ones(1, n_s));
-use_gaussian = true;
-sigma  = 1.5;
-beta   = 0.7;
-w_min  = 0.0;
-
-modelFile = 'cache/rf_Kimportance_simple.mat';
-K_map = predict_K_importance(A, B_, adjMtx, modelFile);  % RF 模型预测出的kernel
-imagesc(K_map); colorbar; title('Predicted K importance');
-W = K_map;  % 直接用RF输出
-
-
 %% 2. EA Parameters (Updated for the new strategy)
 % =========================================================================
 popSize     = 20;      % Population size
@@ -108,8 +81,8 @@ for i = 1:popSize
     num_links = randi([min_links, max_links]);
     
     % Part 4: Actuator and Sensor binary masks
-    act_bin  = double(rand(1, len_act_bin)  > 0.001);
-    sens_bin = double(rand(1, len_sens_bin) > 0.001);
+    act_bin  = double(rand(1, len_act_bin)  > 0.01);
+    sens_bin = double(rand(1, len_sens_bin) > 0.01);
 
     % Combine into full gene
     pop{i} = [diag_Q, diag_R, num_links, act_bin, sens_bin];
@@ -157,22 +130,21 @@ for iGen = 1:maxGen
             cts{i} = [0 0];
             continue;
         end
-        
-        % Step C: Apply RF-based kernel gating + sparsification
+
+        % Step C: Sparsify K_dense by strongest |K| elements
         K_sparse = zeros(Nu, Nx);
-       
         [~, sorted_idx] = sort(abs(K_dense(:)), 'descend');
-        keep_indices = sorted_idx(1:min(num_links, end));
-        K_sparse(keep_indices) = K_dense(keep_indices);
-        
-        
+        keep_idx = sorted_idx(1:min(num_links, end));
+        K_sparse(keep_idx) = K_dense(keep_idx);
+
+        % Step D: Apply actuator/sensor binary masks
         K_sparse(~act_bin, :) = 0;   % deactivate rows (actuators)
         K_sparse(:, ~sens_bin) = 0;  % deactivate cols (sensors)
-        
+
         % Step E: Compute cost using external cost_EA()
         J = cost_EA(A, B_, Q_bm, R_bm_, K_sparse, costBM, alpha, max_links);
         costs(i) = J;
-        flag = [flag check_stability_margin(A,B_,K_sparse,K_dense)];
+       
         % Step F: Count active structure
         active_rows = nnz(any(K_sparse,2));
         active_cols = nnz(any(K_sparse,1));

@@ -120,6 +120,12 @@ All figures saved under `figures/`:
 
 ---
 
+## Gershgorin Repair: Effect on Convergence
+
+The Gershgorin disk repair steers the population away from unstable regions early in the search, which has a compounding effect on cost convergence. During the first ~50 generations, the repair fires frequently (10–16 repairs/gen), quickly driving the unstable-individual count from ~10 down to near zero by generation 70; once the population stabilizes, repair activity ceases almost entirely and the EA exploits the feasible region more efficiently. This accelerated feasibility leads to a strictly lower final best cost (~20.8 vs. ~21.3 for the no-repair baseline), demonstrating that eliminating instability penalties allows selection pressure to focus on cost reduction rather than survival.
+
+---
+
 ## 📊 Example Run
 
 ```matlab

@@ -1,0 +1,332 @@
+%% plot_figs.m
+% Reproduce Fig 1 (convergence + topology) and Fig 2 (unstable: Baseline vs Gershgorin)
+% from saved data — no algorithm required.
+%
+% Prerequisites (run once each to generate the .mat files):
+%   analysis_perf_bounds.m    → fig_data.mat
+%   run_multi_seed_unstable.m → fig_data_unstable.mat
+%
+% Usage:
+%   cd plot_only
+%   plot_figs
+%
+% Tune showLB / lb_lambda below without rerunning any EA.
+
+clear; clc; close all;
+load('fig_data.mat');
+U = load('fig_data_unstable.mat');   % isolated struct — avoids overwriting numSeeds, eaSeeds, etc.
+
+%% ===================== Configurable display options =====================
+showLB    = true;   % Show exponential lower bound (Eq. 49)
+lb_lambda = 0.05;   % λ; paper empirical range ≈ [0.035, 0.069] (4×4 grid)
+
+%% ===================== Derive simple quantities =====================
+nxVec    = sysSize(:,1);
+nuVec    = sysSize(:,2);
+nGrid    = numel(gridSizes);
+numSeeds = numel(eaSeeds);
+maxGen   = ea_params.maxGen;
+gens     = (1:maxGen)';
+dimLabel = arrayfun(@(g) sprintf('%dx%d', g, g), gridSizes, 'UniformOutput', false)';
+nShinSeeds = size(shin_ea_hist, 2);
+
+%% ===================== Colors & fonts =====================
+axFS = 18;  labFS = 19;  titFS = 19;  legFS = 15;  lw = 3;
+cb_ea    = [0.00 0.45 0.74];
+cb_dens  = [0.50 0.50 0.50];
+cb_diag  = [0.85 0.33 0.10];
+cb_trunc = [0.47 0.67 0.19];
+cb_lb    = [0.93 0.69 0.13];
+ca_ea    = [0.75 0.85 1.00];
+barW     = 0.18;
+
+%% ===================== Figure 1: Normalized Convergence =====================
+fig1 = figure('Position', [40 60 2200 820], 'Color', 'w');
+set(fig1, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
+
+for g = 1:nGrid
+    subplot(2, nGrid+1, g); hold on;
+
+    Jref = mean(denseCostRef(g,:));
+    normMat = zeros(maxGen, numSeeds);
+    for s = 1:numSeeds
+        normMat(:, s) = eaCurves{g, s} / denseCostRef(g, s);
+    end
+    mu = mean(normMat, 2);
+    sd = std(normMat, 0, 2);
+
+    fill([gens; flipud(gens)], [mu+sd; flipud(max(mu-sd, 0))], ...
+        ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+    hEA = plot(gens, mu, '-', 'Color', cb_ea, 'LineWidth', lw);
+
+    hDens = yline(1.0, '--', 'Color', cb_dens, 'LineWidth', 2);
+
+    J_diag_n = meanTotal(g,2) / Jref;
+    if J_diag_n < 1e4
+        hDiag = yline(J_diag_n, '-.', 'Color', cb_diag, 'LineWidth', 2);
+    else
+        hDiag = plot(NaN, NaN, '-.', 'Color', cb_diag, 'LineWidth', 2);
+        text(maxGen/2, max(mu)*0.9, 'Diag: Unstable', 'Color', cb_diag, ...
+            'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
+    end
+
+    J_trunc_n = meanCompTrunc(g) / Jref;
+    if isfinite(J_trunc_n)
+        hTrunc = yline(J_trunc_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
+    else
+        hTrunc = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
+        text(maxGen*0.7, max(mu)*0.85, 'Trunc: Unstable', 'Color', cb_trunc, ...
+            'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
+    end
+
+    % Exponential lower bound: J_min(t) >= J_R* + A0*exp(-lambda*t)  [Eq. (49)]
+    hLB = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+    if showLB
+        lam_g = lb_lambda;
+        JR_vec  = arrayfun(@(s) eaCurves{g,s}(end), 1:numSeeds);
+        A0_vec  = arrayfun(@(s) eaCurves{g,s}(1),   1:numSeeds) - JR_vec;
+        JR_star = mean(JR_vec);
+        A0_g    = max(mean(A0_vec), 0);
+        LB_curve = (JR_star + A0_g * exp(-lam_g * gens)) / Jref;
+        delete(hLB);
+        hLB = plot(gens, LB_curve, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+    end
+
+    % Mark convergence generation (mean)
+    cg = round(nanmean(convGenDense(g,:)));
+    if ~isnan(cg) && cg <= maxGen
+        plot(cg, mu(cg), 'v', 'MarkerSize', 8, 'MarkerFaceColor', cb_ea, ...
+            'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
+    end
+
+    xlabel('Generation', 'FontSize', labFS);
+    if g == 1
+        ylabel('$J \;/\; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
+    end
+    title(sprintf('(%c) %d$\\times$%d ($n$=%d, $m$=%d)', ...
+        char('a'+g-1), gridSizes(g), gridSizes(g), nxVec(g), nuVec(g)), ...
+        'FontSize', titFS, 'Interpreter', 'latex');
+    grid on; box on;
+
+    if g == 1 || g == nGrid
+        legHandles = [hEA, hDens, hDiag, hTrunc];
+        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=3$ Trunc.'};
+        if showLB
+            legHandles(end+1) = hLB;
+            legLabels{end+1}  = 'LB (Eq.~49)';
+        end
+        legend(legHandles, legLabels, 'Location', 'northeast', ...
+            'FontSize', legFS, 'Interpreter', 'latex');
+    end
+end
+
+sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
+    'FontSize', 16, 'FontWeight', 'bold', 'FontName', 'Times New Roman');
+
+%% ---- Figure 1 panel (c): IEEE 13-bus ----
+si_m = 1;
+figure(fig1);
+subplot(2, nGrid+1, nGrid+1); hold on;
+
+Jref_sh    = shin_dense_comp(si_m);
+normMat_sh = zeros(maxGen, nShinSeeds);
+for ss = 1:nShinSeeds
+    normMat_sh(:, ss) = shin_ea_hist{si_m, ss}.bestCost / Jref_sh;
+end
+mu_sh = mean(normMat_sh, 2);
+sd_sh = std(normMat_sh, 0, 2);
+
+fill([gens; flipud(gens)], [mu_sh+sd_sh; flipud(max(mu_sh-sd_sh, 0))], ...
+    ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+hEA_sh   = plot(gens, mu_sh, '-',  'Color', cb_ea,   'LineWidth', lw);
+hDens_sh = yline(1.0, '--', 'Color', cb_dens, 'LineWidth', 2);
+
+J_diag_sh_n = shin_diag_comp_ratio;
+if J_diag_sh_n < 1e4
+    hDiag_sh = yline(J_diag_sh_n, '-.', 'Color', cb_diag, 'LineWidth', 2);
+else
+    hDiag_sh = plot(NaN, NaN, '-.', 'Color', cb_diag, 'LineWidth', 2);
+    text(maxGen/2, max(mu_sh)*0.9, 'Diag: Unstable', 'Color', cb_diag, ...
+        'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
+end
+
+J_trunc_sh_n = shin_trunc_comp_ratio(si_m);
+if isfinite(J_trunc_sh_n)
+    hTrunc_sh = yline(J_trunc_sh_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
+else
+    hTrunc_sh = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
+    text(maxGen*0.7, max(mu_sh)*0.85, 'Trunc: Unstable', 'Color', cb_trunc, ...
+        'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
+end
+
+xlabel('Generation', 'FontSize', labFS);
+title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
+legend([hEA_sh, hDens_sh, hDiag_sh, hTrunc_sh], ...
+    {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=2$ Trunc.'}, ...
+    'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+grid on; box on;
+
+sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
+    'FontSize', 16, 'FontWeight', 'bold', 'FontName', 'Times New Roman');
+
+%% ---- Figure 1 row 2: EA Controller Topology Diagrams ----
+figure(fig1);
+
+% --- Panels (d) and (e): Grid systems ---
+for g = 1:nGrid
+    subplot(2, nGrid+1, nGrid+1+g); hold on; box on; axis equal off;
+
+    gSz  = gridSizes(g);
+    nN   = gSz^2;
+    adjM = adjMtx_all{g};
+    Ke   = K_ea_all{g};
+    actN = actuatedNodes_all{g};
+
+    nodePos = [(mod((1:nN)-1, gSz)+1)', (floor(((1:nN)-1)/gSz)+1)'];
+    edgeThresh = max(abs(Ke(:))) * 0.05;
+
+    for u = 1:nN
+        for v = u+1:nN
+            if adjM(u,v) > 0
+                act_u = find(actN == u, 1);
+                act_v = find(actN == v, 1);
+                used = false;
+                if ~isempty(act_u)
+                    used = used || (abs(Ke(act_u, v)) > edgeThresh) || (abs(Ke(act_u, nN+v)) > edgeThresh);
+                end
+                if ~isempty(act_v)
+                    used = used || (abs(Ke(act_v, u)) > edgeThresh) || (abs(Ke(act_v, nN+u)) > edgeThresh);
+                end
+                if used
+                    plot(nodePos([u v],1), nodePos([u v],2), '-', ...
+                        'Color', cb_ea, 'LineWidth', 2.5);
+                else
+                    plot(nodePos([u v],1), nodePos([u v],2), '-', ...
+                        'Color', [0.82 0.82 0.82], 'LineWidth', 0.8);
+                end
+            end
+        end
+    end
+
+    rowNorms     = vecnorm(Ke, 2, 2);
+    activeActIdx = find(rowNorms > max(rowNorms) * 0.05);
+    activeNodes  = actN(activeActIdx);
+    inactiveNodes = setdiff(1:nN, activeNodes);
+
+    scatter(nodePos(inactiveNodes,1), nodePos(inactiveNodes,2), 36, ...
+        [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
+    scatter(nodePos(activeNodes,1), nodePos(activeNodes,2), 56, ...
+        cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+
+    title(sprintf('(%c) %d$\\times$%d EA controller', char('d'+g-1), gSz, gSz), ...
+        'FontSize', titFS, 'Interpreter', 'latex');
+end
+
+% --- Panel (f): IEEE 13-bus EA controller ---
+subplot(2, nGrid+1, 2*(nGrid+1)); hold on; box on; axis equal off;
+
+nN_sh      = n_shin;
+adjM_sh    = busInfo.adjMtx;
+Ke_sh      = K_ea_shin;
+nodePos_sh = busInfo.nodeCoords;
+
+edgeThresh_sh = max(abs(Ke_sh(:))) * 0.05;
+
+for u = 1:nN_sh
+    for v = u+1:nN_sh
+        if adjM_sh(u,v) > 0
+            used_sh = (abs(Ke_sh(u, v)) > edgeThresh_sh) || (abs(Ke_sh(u, nN_sh+v)) > edgeThresh_sh) || ...
+                      (abs(Ke_sh(v, u)) > edgeThresh_sh) || (abs(Ke_sh(v, nN_sh+u)) > edgeThresh_sh);
+            if used_sh
+                plot(nodePos_sh([u v],1), nodePos_sh([u v],2), '-', ...
+                    'Color', cb_ea, 'LineWidth', 2.5);
+            else
+                plot(nodePos_sh([u v],1), nodePos_sh([u v],2), '-', ...
+                    'Color', [0.82 0.82 0.82], 'LineWidth', 0.8);
+            end
+        end
+    end
+end
+
+rowNorms_sh      = vecnorm(Ke_sh, 2, 2);
+activeNodes_sh   = find(rowNorms_sh > 0);
+inactiveNodes_sh = setdiff(1:nN_sh, activeNodes_sh);
+scatter(nodePos_sh(inactiveNodes_sh,1), nodePos_sh(inactiveNodes_sh,2), 28, ...
+    [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
+scatter(nodePos_sh(activeNodes_sh,1), nodePos_sh(activeNodes_sh,2), 42, ...
+    cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+
+title('(f) IEEE 13-bus EA controller', 'FontSize', titFS, 'Interpreter', 'latex');
+
+exportgraphics(fig1, 'perf_bounds_convergence.pdf', 'ContentType', 'vector');
+saveas(fig1, 'perf_bounds_convergence.png');
+fprintf('Figure 1 saved → perf_bounds_convergence.*\n');
+
+%% ===================== Figure 2: Unstable System (Baseline vs Gershgorin) =====================
+gens_u = (1:U.maxGen)';
+cb_u = [0.00 0.45 0.74;    % blue   — Baseline
+        0.85 0.33 0.10];   % orange — Gershgorin
+ca_u = [0.75 0.85 1.00;
+        1.00 0.82 0.72];
+
+fig2 = figure('Position', [60 60 1400 420], 'Color', 'w');
+set(fig2, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
+
+% --- (a) Best Cost (normalised by Dense LQR total cost) ---
+subplot(1, 3, 1); hold on;
+for c = 1:U.nCond
+    mu = mean(U.bestCostAll(:,:,c), 2) / U.J_dense_ref;
+    sd = std(U.bestCostAll(:,:,c),  0, 2) / U.J_dense_ref;
+    fill([gens_u; flipud(gens_u)], [mu+sd; flipud(mu-sd)], ...
+        ca_u(c,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
+end
+h = gobjects(U.nCond,1);
+for c = 1:U.nCond
+    h(c) = plot(gens_u, mean(U.bestCostAll(:,:,c),2) / U.J_dense_ref, ...
+        '-', 'Color', cb_u(c,:), 'LineWidth', lw);
+end
+hRef = yline(1.0, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1.8);
+xlabel('Generation', 'FontSize', labFS);
+ylabel('Best Cost $/ \; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
+title('(a) Best Cost Convergence', 'FontSize', titFS);
+legend([h; hRef], [U.condNames, {'Dense LQR ($=1$)'}], ...
+    'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+grid on; box on;
+
+% --- (b) Unstable Count ---
+subplot(1, 3, 2); hold on;
+for c = 1:U.nCond
+    mu = mean(U.unstableAll(:,:,c), 2);
+    sd = std(U.unstableAll(:,:,c),  0, 2);
+    fill([gens_u; flipud(gens_u)], [mu+sd; flipud(mu-sd)], ...
+        ca_u(c,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
+end
+for c = 1:U.nCond
+    plot(gens_u, mean(U.unstableAll(:,:,c),2), '-', 'Color', cb_u(c,:), 'LineWidth', lw);
+end
+xlabel('Generation', 'FontSize', labFS);
+ylabel('Unstable Count', 'FontSize', labFS);
+title('(b) Stability Failures', 'FontSize', titFS);
+legend(U.condNames, 'Location', 'northeast', 'FontSize', legFS);
+ylim([0 U.ea_params.popSize]);
+grid on; box on;
+
+% --- (c) Gershgorin Repairs ---
+subplot(1, 3, 3); hold on;
+mu_r = mean(U.repairAll(:,:,2), 2);
+sd_r = std(U.repairAll(:,:,2),  0, 2);
+fill([gens_u; flipud(gens_u)], [mu_r+sd_r; flipud(max(mu_r-sd_r,0))], ...
+    ca_u(2,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
+plot(gens_u, mu_r, '-', 'Color', cb_u(2,:), 'LineWidth', lw);
+xlabel('Generation', 'FontSize', labFS);
+ylabel('Repairs / Gen', 'FontSize', labFS);
+title('(c) Gershgorin Repairs', 'FontSize', titFS);
+grid on; box on;
+
+sgtitle(sprintf('EA-LQR: Baseline vs Gershgorin  (Grid %d\\times%d, \\rho(A)=%.2f, %d seeds)', ...
+    U.gridSize, U.gridSize, U.rho_A, U.numSeeds), ...
+    'FontSize', 16, 'FontWeight', 'bold', 'FontName', 'Times New Roman');
+
+exportgraphics(fig2, 'perf_bounds_unstable.pdf', 'ContentType', 'vector');
+saveas(fig2, 'perf_bounds_unstable.png');
+fprintf('Figure 2 (unstable) saved → perf_bounds_unstable.*\n');

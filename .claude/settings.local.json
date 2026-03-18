@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /e/Research/Lisali/EA_new_and_old/EA/*.m)",
+      "Bash(find /e/Research/Lisali/EA_new_and_old/EA -type f -name \"*.m\" | xargs grep -l \"generate_grid_topology\\\\|generate_grid_plant\" 2>/dev/null | head -5)",
+      "Bash(wc -l \"/e/Research/Lisali/EA_new_and_old/EA/EA functions\"/*.m | tail -1)",
+      "Bash(grep \"\\\\.m$\")",
+      "Bash(find e:ResearchLisaliEA_new_and_oldEA -name *.png -o -name *.fig)"
+    ]
+  }
+}
