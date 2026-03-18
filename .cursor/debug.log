@@ -1,4 +1,0 @@
-{"location":"run_ieee13bus_ea:main_loop","message":"opts set for EA","data":{"sc":1,"Nu":13,"size_R_bm":[13,13],"size_Q_bm":[26,26]},"hypothesisId":"H1","timestamp":1773669627723}
-{"location":"run_ieee13bus_ea:main_loop","message":"opts set for EA","data":{"sc":2,"Nu":4,"size_R_bm":[4,4],"size_Q_bm":[26,26]},"hypothesisId":"H1","timestamp":1773669651612}
-{"location":"run_ieee13bus_ea:fig2_loop","message":"Fig2 dimensions","data":{"sc":1,"Nu_sys":13,"size_R_opts":[4,4],"size_Q_opts":[26,26],"size_R_sys":[13,13]},"hypothesisId":"H1","timestamp":1773669830393}
-{"location":"run_ieee13bus_ea:fig2_loop","message":"Fig2 dimensions","data":{"sc":2,"Nu_sys":4,"size_R_opts":[13,13],"size_Q_opts":[26,26],"size_R_sys":[4,4]},"hypothesisId":"H1","timestamp":1773669837917}
