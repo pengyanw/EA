@@ -32,12 +32,13 @@ nShinSeeds = size(shin_ea_hist, 2);
 
 %% ===================== Colors & fonts =====================
 axFS = 18;  labFS = 19;  titFS = 19;  legFS = 15;  lw = 3;
-cb_ea    = [0.00 0.45 0.74];
-cb_dens  = [0.50 0.50 0.50];
-cb_diag  = [0.85 0.33 0.10];
-cb_trunc = [0.47 0.67 0.19];
-cb_lb    = [0.93 0.69 0.13];
-ca_ea    = [0.75 0.85 1.00];
+cb_ea     = [0.00 0.45 0.74];
+cb_dens   = [0.50 0.50 0.50];
+cb_diag   = [0.85 0.33 0.10];
+cb_trunc  = [0.47 0.67 0.19];
+cb_lb     = [0.93 0.69 0.13];
+cb_purple = [0.49 0.18 0.56];   % purple — act + sensor node
+ca_ea     = [0.75 0.85 1.00];
 barW     = 0.18;
 
 %% ===================== Figure 1: Normalized Convergence =====================
@@ -71,7 +72,7 @@ for g = 1:nGrid
     end
 
     J_trunc_n = meanCompTrunc(g) / Jref;
-    if isfinite(J_trunc_n)
+    if all(trunc_stable_grid(g, :))
         hTrunc = yline(J_trunc_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
     else
         hTrunc = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
@@ -109,8 +110,12 @@ for g = 1:nGrid
     grid on; box on;
 
     if g == 1 || g == nGrid
-        legHandles = [hEA, hDens, hDiag, hTrunc];
-        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=3$ Trunc.'};
+        legHandles = [hEA, hDens, hDiag];
+        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal'};
+        if all(trunc_stable_grid(g, :))
+            legHandles(end+1) = hTrunc;
+            legLabels{end+1}  = '$\kappa=3$ Trunc.';
+        end
         if showLB
             legHandles(end+1) = hLB;
             legLabels{end+1}  = 'LB (Eq.~49)';
@@ -151,7 +156,7 @@ else
 end
 
 J_trunc_sh_n = shin_trunc_comp_ratio(si_m);
-if isfinite(J_trunc_sh_n)
+if shin_trunc_stable(si_m)
     hTrunc_sh = yline(J_trunc_sh_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
 else
     hTrunc_sh = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
@@ -161,9 +166,17 @@ end
 
 xlabel('Generation', 'FontSize', labFS);
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
-legend([hEA_sh, hDens_sh, hDiag_sh, hTrunc_sh], ...
-    {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=2$ Trunc.'}, ...
-    'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+legH_sh = [hEA_sh, hDens_sh];
+legL_sh = {'EA-LQR', 'Dense ($=1$)'};
+if J_diag_sh_n < 1e4
+    legH_sh(end+1) = hDiag_sh;
+    legL_sh{end+1} = 'Diagonal';
+end
+if shin_trunc_stable(si_m)
+    legH_sh(end+1) = hTrunc_sh;
+    legL_sh{end+1} = '$\kappa=2$ Trunc.';
+end
+legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
 grid on; box on;
 
 sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
@@ -185,19 +198,28 @@ for g = 1:nGrid
     nodePos = [(mod((1:nN)-1, gSz)+1)', (floor(((1:nN)-1)/gSz)+1)'];
     edgeThresh = max(abs(Ke(:))) * 0.05;
 
+    % Build K-reachability via shortest physical paths, then color edges
+    G_topo    = graph(adjM);
+    rowNorms  = vecnorm(Ke, 2, 2);
+    usedEdges = false(nN, nN);
+    for i = 1:size(Ke,1)
+        if rowNorms(i) <= max(rowNorms)*0.05, continue; end
+        nSrc = actN(i);
+        for j = 1:nN
+            if j == nSrc, continue; end
+            if (abs(Ke(i,j)) > edgeThresh) || (abs(Ke(i,nN+j)) > edgeThresh)
+                pth = shortestpath(G_topo, nSrc, j);
+                for kk = 1:length(pth)-1
+                    usedEdges(pth(kk), pth(kk+1)) = true;
+                    usedEdges(pth(kk+1), pth(kk)) = true;
+                end
+            end
+        end
+    end
     for u = 1:nN
         for v = u+1:nN
             if adjM(u,v) > 0
-                act_u = find(actN == u, 1);
-                act_v = find(actN == v, 1);
-                used = false;
-                if ~isempty(act_u)
-                    used = used || (abs(Ke(act_u, v)) > edgeThresh) || (abs(Ke(act_u, nN+v)) > edgeThresh);
-                end
-                if ~isempty(act_v)
-                    used = used || (abs(Ke(act_v, u)) > edgeThresh) || (abs(Ke(act_v, nN+u)) > edgeThresh);
-                end
-                if used
+                if usedEdges(u,v)
                     plot(nodePos([u v],1), nodePos([u v],2), '-', ...
                         'Color', cb_ea, 'LineWidth', 2.5);
                 else
@@ -208,15 +230,26 @@ for g = 1:nGrid
         end
     end
 
-    rowNorms     = vecnorm(Ke, 2, 2);
     activeActIdx = find(rowNorms > max(rowNorms) * 0.05);
-    activeNodes  = actN(activeActIdx);
-    inactiveNodes = setdiff(1:nN, activeNodes);
+    actSet       = actN(activeActIdx);            % active actuator nodes
 
-    scatter(nodePos(inactiveNodes,1), nodePos(inactiveNodes,2), 36, ...
-        [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
-    scatter(nodePos(activeNodes,1), nodePos(activeNodes,2), 56, ...
-        cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    sensFlags = false(nN, 1);
+    for jj = 1:nN
+        if any(abs(Ke(:,jj)) > edgeThresh) || any(abs(Ke(:,nN+jj)) > edgeThresh)
+            sensFlags(jj) = true;
+        end
+    end
+    sensSet = find(sensFlags);
+
+    bothSet     = intersect(actSet(:), sensSet(:));
+    actOnlySet  = setdiff(actSet(:),  bothSet);
+    sensOnlySet = setdiff(sensSet(:), bothSet);
+    inactiveSet = setdiff((1:nN)', union(actSet(:), sensSet(:)));
+
+    scatter(nodePos(inactiveSet ,1), nodePos(inactiveSet ,2), 36, [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
+    scatter(nodePos(sensOnlySet ,1), nodePos(sensOnlySet ,2), 56, cb_trunc,  'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    scatter(nodePos(actOnlySet  ,1), nodePos(actOnlySet  ,2), 56, cb_diag,   'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    scatter(nodePos(bothSet     ,1), nodePos(bothSet     ,2), 70, cb_purple, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
 
     title(sprintf('(%c) %d$\\times$%d EA controller', char('d'+g-1), gSz, gSz), ...
         'FontSize', titFS, 'Interpreter', 'latex');
@@ -232,12 +265,25 @@ nodePos_sh = busInfo.nodeCoords;
 
 edgeThresh_sh = max(abs(Ke_sh(:))) * 0.05;
 
+% Build K-reachability via shortest physical paths, then color edges
+G_topo_sh    = graph(adjM_sh);
+usedEdges_sh = false(nN_sh, nN_sh);
+for i = 1:nN_sh
+    for j = 1:nN_sh
+        if j == i, continue; end
+        if (abs(Ke_sh(i,j)) > edgeThresh_sh) || (abs(Ke_sh(i,nN_sh+j)) > edgeThresh_sh)
+            pth = shortestpath(G_topo_sh, i, j);
+            for kk = 1:length(pth)-1
+                usedEdges_sh(pth(kk), pth(kk+1)) = true;
+                usedEdges_sh(pth(kk+1), pth(kk)) = true;
+            end
+        end
+    end
+end
 for u = 1:nN_sh
     for v = u+1:nN_sh
         if adjM_sh(u,v) > 0
-            used_sh = (abs(Ke_sh(u, v)) > edgeThresh_sh) || (abs(Ke_sh(u, nN_sh+v)) > edgeThresh_sh) || ...
-                      (abs(Ke_sh(v, u)) > edgeThresh_sh) || (abs(Ke_sh(v, nN_sh+u)) > edgeThresh_sh);
-            if used_sh
+            if usedEdges_sh(u,v)
                 plot(nodePos_sh([u v],1), nodePos_sh([u v],2), '-', ...
                     'Color', cb_ea, 'LineWidth', 2.5);
             else
@@ -248,13 +294,25 @@ for u = 1:nN_sh
     end
 end
 
-rowNorms_sh      = vecnorm(Ke_sh, 2, 2);
-activeNodes_sh   = find(rowNorms_sh > 0);
-inactiveNodes_sh = setdiff(1:nN_sh, activeNodes_sh);
-scatter(nodePos_sh(inactiveNodes_sh,1), nodePos_sh(inactiveNodes_sh,2), 28, ...
-    [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
-scatter(nodePos_sh(activeNodes_sh,1), nodePos_sh(activeNodes_sh,2), 42, ...
-    cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+rowNorms_sh = vecnorm(Ke_sh, 2, 2);
+sensUsed_sh = false(nN_sh, 1);
+for j = 1:nN_sh
+    if any(abs(Ke_sh(:,j)) > edgeThresh_sh) || any(abs(Ke_sh(:,nN_sh+j)) > edgeThresh_sh)
+        sensUsed_sh(j) = true;
+    end
+end
+actSet_sh      = find(rowNorms_sh > max(rowNorms_sh) * 0.05);
+sensSet_sh     = find(sensUsed_sh);
+
+bothSet_sh     = intersect(actSet_sh(:), sensSet_sh(:));
+actOnlySet_sh  = setdiff(actSet_sh(:),  bothSet_sh);
+sensOnlySet_sh = setdiff(sensSet_sh(:), bothSet_sh);
+inactiveSet_sh = setdiff((1:nN_sh)', union(actSet_sh(:), sensSet_sh(:)));
+
+scatter(nodePos_sh(inactiveSet_sh ,1), nodePos_sh(inactiveSet_sh ,2), 28, [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
+scatter(nodePos_sh(sensOnlySet_sh ,1), nodePos_sh(sensOnlySet_sh ,2), 42, cb_trunc,  'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+scatter(nodePos_sh(actOnlySet_sh  ,1), nodePos_sh(actOnlySet_sh  ,2), 42, cb_diag,   'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+scatter(nodePos_sh(bothSet_sh     ,1), nodePos_sh(bothSet_sh     ,2), 56, cb_purple, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
 
 title('(f) IEEE 13-bus EA controller', 'FontSize', titFS, 'Interpreter', 'latex');
 

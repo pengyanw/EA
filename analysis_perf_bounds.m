@@ -61,14 +61,17 @@ eaCurves     = cell(nGrid, numSeeds);
 sysSize      = zeros(nGrid, 2);
 denseCostRef = zeros(nGrid, numSeeds);
 
-J_perf_trunc = NaN(nGrid, numSeeds);   % κ=2 truncated LQR ratio (/ costBM)
-nnz_trunc    = NaN(nGrid, numSeeds);
-J_comp_trunc = NaN(nGrid, numSeeds);   % κ=2 composite cost (LQR+struct) ratio
+J_perf_trunc      = NaN(nGrid, numSeeds);   % κ=3 truncated LQR ratio (/ costBM)
+nnz_trunc         = NaN(nGrid, numSeeds);
+J_comp_trunc      = NaN(nGrid, numSeeds);   % κ=3 composite cost (LQR+struct) ratio
+trunc_stable_grid = false(nGrid, numSeeds); % true if K_trunc closed-loop is stable
 
 % Per-grid topology & controller (for row-2 diagrams)
 adjMtx_all       = cell(nGrid, 1);
 K_ea_all         = cell(nGrid, 1);
 actuatedNodes_all = cell(nGrid, 1);
+
+shin_kappa = 3;   % locality radius for K-truncation (shared by grid and IEEE 13-bus)
 
 %% ===================== Main Loop =====================
 for s = 1:numSeeds
@@ -99,9 +102,9 @@ for s = 1:numSeeds
         % ---------- Dense LQR (|K| >= 1e-3) ----------
         K_dense = K_full;
         K_dense(abs(K_dense) < 1e-3) = 0;
-        costBM = get_lqr_cost(A, B, Q_bm, R_bm, K_dense);
+        costBM = get_lqr_cost(A, B, Q_bm, R_bm, K_full);
 
-        % ---------- κ=2 Truncation (Shin-style locality) ----------
+        % ---------- κ=3 Truncation (Shin-style locality) ----------
         G_grid  = graph(adjMtx);
         Is_grid = cell(numNodes, 1);
         Js_grid = cell(numNodes, 1);
@@ -112,19 +115,17 @@ for s = 1:numSeeds
             Js_grid{actuatedNodes(jj)} = jj;    % node k → control row jj
         end
         prob_grid = struct('name', 'grid');      % → unweighted hop distances
-        K_pos_trunc_grid = truncate(-K_full, G_grid, Is_grid, Js_grid, 3, prob_grid);
-        K_trunc_grid     = -K_pos_trunc_grid;   % back to u = K*x convention
-        nnz_trunc(g, s)  = nnz(K_trunc_grid);
-        if max(abs(eig(A + B * K_trunc_grid))) >= 1.0
-            J_perf_trunc(g, s) = Inf;
+        K_trunc_grid    = truncate(K_full, G_grid, Is_grid, Js_grid, shin_kappa, prob_grid);
+        nnz_trunc(g, s) = nnz(K_trunc_grid);
+        rho_trunc_grid  = max(abs(eig(A + B * K_trunc_grid)));
+        trunc_stable_grid(g, s) = (rho_trunc_grid < 1.0);
+        if ~trunc_stable_grid(g, s)
+            fprintf('  Trunc k=%d grid %dx%d: UNSTABLE (rho=%.4f)\n', shin_kappa, gridSize, gridSize, rho_trunc_grid);
             J_comp_trunc(g, s) = Inf;
+            J_perf_trunc(g, s) = Inf;
         else
+            J_comp_trunc(g, s) = cost_EA(A, B, Q_bm, R_bm, K_trunc_grid, costBM, alpha);
             J_perf_trunc(g, s) = get_lqr_cost(A, B, Q_bm, R_bm, K_trunc_grid) / costBM;
-            w_c_ = 0.05*(1-alpha);  w_r_ = 0.4*(1-alpha);  w_s_ = 0.2*(1-alpha);
-            J_comp_trunc(g, s) = J_perf_trunc(g, s) ...
-                + w_c_*nnz_trunc(g, s) ...
-                + w_r_*nnz(any(K_trunc_grid, 2)) ...
-                + w_s_*nnz(any(K_trunc_grid, 1));
         end
 
         % ---------- Diagonal LQR ----------
@@ -138,12 +139,12 @@ for s = 1:numSeeds
                 K_diag(i, c1) = K_full(i, c1);
             end
         end
-        if max(abs(eig(A + B * K_diag))) >= 1.0
-            [K_diag, info_d] = gersgorin_stabilize_K(A, B, K_diag, K_full);
-            if ~info_d.success
-                fprintf('  WARNING: Diagonal K still unstable (grid %dx%d)\n', gridSize, gridSize);
-            end
-        end
+        % if max(abs(eig(A + B * K_diag))) >= 1.0
+        %     [K_diag, info_d] = gersgorin_stabilize_K(A, B, K_diag, K_full);
+        %     if ~info_d.success
+        %         fprintf('  WARNING: Diagonal K still unstable (grid %dx%d)\n', gridSize, gridSize);
+        %     end
+        % end
 
         % Dense / Diagonal cost decomposition (per seed)
         [J_d, Jp_d, Js_d] = cost_decompose(A, B, Q_bm, R_bm, K_dense, costBM, alpha);
@@ -277,7 +278,7 @@ axFS = 18;  labFS = 19;  titFS = 19;  legFS = 15;  lw = 3;
 cb_ea    = [0.00 0.45 0.74];
 cb_dens  = [0.50 0.50 0.50];
 cb_diag  = [0.85 0.33 0.10];
-cb_trunc = [0.47 0.67 0.19];   % green — κ=2 truncation
+cb_trunc = [0.47 0.67 0.19];   % green — κ=3 truncation
 cb_lb    = [0.93 0.69 0.13];   % amber — Eq. (49) exponential lower bound
 ca_ea    = [0.75 0.85 1.00];
 gens = (1:maxGen)';
@@ -313,9 +314,9 @@ for g = 1:nGrid
             'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
     end
 
-    % κ=2 Truncation reference
+    % κ=3 Truncation reference
     J_trunc_n = meanCompTrunc(g) / Jref;
-    if isfinite(J_trunc_n)
+    if all(trunc_stable_grid(g, :))
         hTrunc = yline(J_trunc_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
     else
         hTrunc = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
@@ -354,8 +355,12 @@ for g = 1:nGrid
     grid on; box on;
 
     if g == 1 || g == nGrid
-        legHandles = [hEA, hDens, hDiag, hTrunc];
-        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=3$ Trunc.'};
+        legHandles = [hEA, hDens, hDiag];
+        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal'};
+        if all(trunc_stable_grid(g, :))
+            legHandles(end+1) = hTrunc;
+            legLabels{end+1}  = '$\kappa=3$ Trunc.';
+        end
         if showLB
             legHandles(end+1) = hLB;
             legLabels{end+1}  = 'LB (Eq.~49)';
@@ -403,7 +408,7 @@ fprintf('  IEEE 13-BUS: Dense LQR vs kappa=2 Truncation vs EA-LQR\n');
 fprintf('=================================================================\n');
 
 % ---- Parameters ----
-shin_kappa  = 2;
+% shin_kappa defined above (shared with grid truncation)
 shin_seeds  = [1];
 nShinSeeds  = numel(shin_seeds);
 
@@ -419,6 +424,7 @@ shin_nnz_K          = NaN(nShinSys, 3, nShinSeeds);
 shin_ea_hist        = cell(nShinSys, nShinSeeds);
 shin_dense_comp     = NaN(nShinSys, 1);
 shin_trunc_comp_ratio = NaN(nShinSys, 1);
+shin_trunc_stable     = false(nShinSys, 1);   % true if K_trunc IEEE 13-bus is stable
 
 % ---- Build IEEE 13-bus system ----
 cfg13.model     = 'swing';
@@ -451,10 +457,7 @@ for si = 1:nShinSys
         shin_J_raw(si, 1, ss) = J_dense_shin;
         shin_nnz_K(si, 1, ss) = nnz(K_dense_shin);
     end
-    shin_dense_comp(si) = 1.0 ...
-        + 0.05*nnz(K_dense_shin) ...
-        + 0.4 *nnz(any(K_dense_shin,2)) ...
-        + 0.2 *nnz(any(K_dense_shin,1));
+    shin_dense_comp(si) = cost_EA(A_shin, B_shin, Q_shin, R_shin, K_dense_shin, J_dense_shin, 0);
 
     % ---- Method 1b: Diagonal LQR ----
     K_diag_shin = zeros(size(K_dense_shin));   % 13×26
@@ -470,14 +473,13 @@ for si = 1:nShinSys
     end
     J_diag_shin = get_lqr_cost(A_shin, B_shin, Q_shin, R_shin, K_diag_shin);
     fprintf('  Diag   : J=%.4e  ratio=%.4f  nnz=%d\n', J_diag_shin, J_diag_shin/J_dense_shin, nnz(K_diag_shin));
-    J_diag_shin_n = J_diag_shin/J_dense_shin ...
-        + 0.05*nnz(K_diag_shin) + 0.4*nnz(any(K_diag_shin,2)) + 0.2*nnz(any(K_diag_shin,1));
+    J_diag_shin_n = cost_EA(A_shin, B_shin, Q_shin, R_shin, K_diag_shin, J_dense_shin, 0);
     shin_diag_comp_ratio = J_diag_shin_n / shin_dense_comp(si);
 
     % ---- Method 2: κ=2 Truncation ----
-    K_pos_trunc  = truncate(K_pos_dense, G_shin, Is_shin, Js_shin, shin_kappa, prob_shin);
-    K_trunc_shin = -K_pos_trunc;
+    K_trunc_shin = truncate(K_dense_shin, G_shin, Is_shin, Js_shin, shin_kappa, prob_shin);
     rho_trunc    = max(abs(eig(A_shin + B_shin * K_trunc_shin)));
+    shin_trunc_stable(si) = (rho_trunc < 1.0);
     if rho_trunc >= 1.0
         fprintf('  Trunc k=%d: UNSTABLE (rho=%.4f)\n', shin_kappa, rho_trunc);
         J_trunc_shin = Inf;
@@ -486,10 +488,7 @@ for si = 1:nShinSys
         J_trunc_shin = get_lqr_cost(A_shin, B_shin, Q_shin, R_shin, K_trunc_shin);
         fprintf('  Trunc k=%d: J=%.4e  ratio=%.4f  nnz=%d  rho=%.4f\n', ...
             shin_kappa, J_trunc_shin, J_trunc_shin/J_dense_shin, nnz(K_trunc_shin), rho_trunc);
-        J_comp_trunc_shin = J_trunc_shin/J_dense_shin ...
-            + 0.05*nnz(K_trunc_shin) ...
-            + 0.4 *nnz(any(K_trunc_shin,2)) ...
-            + 0.2 *nnz(any(K_trunc_shin,1));
+        J_comp_trunc_shin = cost_EA(A_shin, B_shin, Q_shin, R_shin, K_trunc_shin, J_dense_shin, 0);
         shin_trunc_comp_ratio(si) = J_comp_trunc_shin / shin_dense_comp(si);
     end
     for ss = 1:nShinSeeds
@@ -696,7 +695,7 @@ else
 end
 
 J_trunc_sh_n = shin_trunc_comp_ratio(si_m);
-if isfinite(J_trunc_sh_n)
+if shin_trunc_stable(si_m)
     hTrunc_sh = yline(J_trunc_sh_n, ':', 'Color', cb_trunc, 'LineWidth', 2);
 else
     hTrunc_sh = plot(NaN, NaN, ':', 'Color', cb_trunc, 'LineWidth', 2);
@@ -706,9 +705,17 @@ end
 
 xlabel('Generation', 'FontSize', labFS);
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
-legend([hEA_sh, hDens_sh, hDiag_sh, hTrunc_sh], ...
-    {'EA-LQR', 'Dense ($=1$)', 'Diagonal', '$\kappa=2$ Trunc.'}, ...
-    'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+legH_sh = [hEA_sh, hDens_sh];
+legL_sh = {'EA-LQR', 'Dense ($=1$)'};
+if J_diag_sh_n < 1e4
+    legH_sh(end+1) = hDiag_sh;
+    legL_sh{end+1} = 'Diagonal';
+end
+if shin_trunc_stable(si_m)
+    legH_sh(end+1) = hTrunc_sh;
+    legL_sh{end+1} = '$\kappa=2$ Trunc.';
+end
+legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
 grid on; box on;
 
 sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
@@ -716,6 +723,11 @@ sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
 
 %% ---- Figure 1 row 2: EA Controller Topology Diagrams ----
 figure(fig1);
+
+% Marker colors
+c_act  = [0.85 0.33 0.10];   % orange for actuator nodes
+c_sens = [0.17 0.63 0.17];   % green  for sensor nodes
+c_both = [0.49 0.18 0.56];   % purple for actuator + sensor nodes
 
 % --- Panels (d) and (e): Grid systems ---
 for g = 1:nGrid
@@ -733,20 +745,28 @@ for g = 1:nGrid
     % Threshold: entry significant if |K(i,j)| > 5% of max|K|
     edgeThresh = max(abs(Ke(:))) * 0.05;
 
-    % Draw topology edges, colored if used by K_ea (above threshold)
+    % Build K-reachability via shortest physical paths, then color edges
+    G_topo    = graph(adjM);
+    rowNorms  = vecnorm(Ke, 2, 2);
+    usedEdges = false(nN, nN);
+    for i = 1:size(Ke,1)
+        if rowNorms(i) <= max(rowNorms)*0.05, continue; end
+        nSrc = actN(i);
+        for j = 1:nN
+            if j == nSrc, continue; end
+            if (abs(Ke(i,j)) > edgeThresh) || (abs(Ke(i,nN+j)) > edgeThresh)
+                pth = shortestpath(G_topo, nSrc, j);
+                for kk = 1:length(pth)-1
+                    usedEdges(pth(kk), pth(kk+1)) = true;
+                    usedEdges(pth(kk+1), pth(kk)) = true;
+                end
+            end
+        end
+    end
     for u = 1:nN
         for v = u+1:nN
             if adjM(u,v) > 0
-                act_u = find(actN == u, 1);
-                act_v = find(actN == v, 1);
-                used = false;
-                if ~isempty(act_u)
-                    used = used || (abs(Ke(act_u, v)) > edgeThresh) || (abs(Ke(act_u, nN+v)) > edgeThresh);
-                end
-                if ~isempty(act_v)
-                    used = used || (abs(Ke(act_v, u)) > edgeThresh) || (abs(Ke(act_v, nN+u)) > edgeThresh);
-                end
-                if used
+                if usedEdges(u,v)
                     plot(nodePos([u v],1), nodePos([u v],2), '-', ...
                         'Color', cb_ea, 'LineWidth', 2.5);
                 else
@@ -758,15 +778,42 @@ for g = 1:nGrid
     end
 
     % Active node: row norm > 5% of max row norm (filters Gershgorin-repair artifacts)
-    rowNorms      = vecnorm(Ke, 2, 2);
-    activeActIdx  = find(rowNorms > max(rowNorms) * 0.05);
-    activeNodes   = actN(activeActIdx);
-    inactiveNodes = setdiff(1:nN, activeNodes);
+    activeActIdx = find(rowNorms > max(rowNorms) * 0.05);
+    activeNodes  = actN(activeActIdx);
 
-    scatter(nodePos(inactiveNodes,1), nodePos(inactiveNodes,2), 36, ...
-        [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
-    scatter(nodePos(activeNodes,1), nodePos(activeNodes,2), 56, ...
-        cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    % Sensor nodes: physical node j is a sensor if any column j or nN+j has a significant entry
+    sensorMask = false(nN, 1);
+    for j = 1:nN
+        if any(abs(Ke(:,j)) > edgeThresh) || any(abs(Ke(:,nN+j)) > edgeThresh)
+            sensorMask(j) = true;
+        end
+    end
+    sensorNodes = find(sensorMask);
+
+    % Classify nodes into 4 categories
+    actOnlyNodes  = setdiff(activeNodes(:),  sensorNodes(:));
+    sensOnlyNodes = setdiff(sensorNodes(:),  activeNodes(:));
+    bothNodes     = intersect(activeNodes(:), sensorNodes(:));
+    inactiveNodes = setdiff(1:nN, union(activeNodes(:), sensorNodes(:)));
+
+    % Inactive: gray circle
+    scatter(nodePos(inactiveNodes,1), nodePos(inactiveNodes,2), 30, ...
+        [0.75 0.75 0.75], 'o', 'filled', 'MarkerEdgeColor', 'none');
+    % Sensor-only: green circle
+    if ~isempty(sensOnlyNodes)
+        scatter(nodePos(sensOnlyNodes,1), nodePos(sensOnlyNodes,2), 60, ...
+            c_sens, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    end
+    % Actuator-only: orange circle
+    if ~isempty(actOnlyNodes)
+        scatter(nodePos(actOnlyNodes,1), nodePos(actOnlyNodes,2), 60, ...
+            c_act, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+    end
+    % Both roles: purple filled circle
+    if ~isempty(bothNodes)
+        scatter(nodePos(bothNodes,1), nodePos(bothNodes,2), 80, ...
+            c_both, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
+    end
 
     title(sprintf('(%c) %d$\\times$%d EA controller', char('d'+g-1), gSz, gSz), ...
         'FontSize', titFS, 'Interpreter', 'latex');
@@ -783,14 +830,25 @@ nodePos_sh = busInfo.nodeCoords;       % 13×2 geographic coordinates
 % Threshold: entry significant if |K(i,j)| > 5% of max|K|
 edgeThresh_sh = max(abs(Ke_sh(:))) * 0.05;
 
-% Draw topology edges
+% Build K-reachability via shortest physical paths, then color edges
+G_topo_sh    = graph(adjM_sh);
+usedEdges_sh = false(nN_sh, nN_sh);
+for i = 1:nN_sh
+    for j = 1:nN_sh
+        if j == i, continue; end
+        if (abs(Ke_sh(i,j)) > edgeThresh_sh) || (abs(Ke_sh(i,nN_sh+j)) > edgeThresh_sh)
+            pth = shortestpath(G_topo_sh, i, j);
+            for kk = 1:length(pth)-1
+                usedEdges_sh(pth(kk), pth(kk+1)) = true;
+                usedEdges_sh(pth(kk+1), pth(kk)) = true;
+            end
+        end
+    end
+end
 for u = 1:nN_sh
     for v = u+1:nN_sh
         if adjM_sh(u,v) > 0
-            % 2d-mesh: actuator i == node i, states theta_i=i, omega_i=nN_sh+i
-            used_sh = (abs(Ke_sh(u, v)) > edgeThresh_sh) || (abs(Ke_sh(u, nN_sh+v)) > edgeThresh_sh) || ...
-                      (abs(Ke_sh(v, u)) > edgeThresh_sh) || (abs(Ke_sh(v, nN_sh+u)) > edgeThresh_sh);
-            if used_sh
+            if usedEdges_sh(u,v)
                 plot(nodePos_sh([u v],1), nodePos_sh([u v],2), '-', ...
                     'Color', cb_ea, 'LineWidth', 2.5);
             else
@@ -802,15 +860,42 @@ for u = 1:nN_sh
 end
 
 % Active node: row norm > 5% of max row norm (filters Gershgorin-repair artifacts)
-rowNorms_sh      = vecnorm(Ke_sh, 2, 2);
-activeNodes_sh   = find(rowNorms_sh >0);
-inactiveNodes_sh = setdiff(1:nN_sh, activeNodes_sh);
-scatter(nodePos_sh(inactiveNodes_sh,1), nodePos_sh(inactiveNodes_sh,2), 28, ...
-    [0.75 0.75 0.75], 'filled', 'MarkerEdgeColor', 'none');
-scatter(nodePos_sh(activeNodes_sh,1), nodePos_sh(activeNodes_sh,2), 42, ...
-    cb_ea, 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+rowNorms_sh = vecnorm(Ke_sh, 2, 2);
+sensUsed_sh = false(nN_sh, 1);
+for j = 1:nN_sh
+    if any(abs(Ke_sh(:,j)) > edgeThresh_sh) || any(abs(Ke_sh(:,nN_sh+j)) > edgeThresh_sh)
+        sensUsed_sh(j) = true;
+    end
+end
+% Classify nodes into 4 categories
+activeActNodes_sh = find(rowNorms_sh > max(rowNorms_sh) * 0.05);
+sensorNodes_sh    = find(sensUsed_sh);
+actOnlyNodes_sh   = setdiff(activeActNodes_sh, sensorNodes_sh);
+sensOnlyNodes_sh  = setdiff(sensorNodes_sh,    activeActNodes_sh);
+bothNodes_sh      = intersect(activeActNodes_sh, sensorNodes_sh);
+inactiveNodes_sh  = setdiff(1:nN_sh, union(activeActNodes_sh, sensorNodes_sh));
+
+s1 = scatter(nodePos_sh(inactiveNodes_sh,1), nodePos_sh(inactiveNodes_sh,2), 24, ...
+    [0.75 0.75 0.75], 'o', 'filled', 'MarkerEdgeColor', 'none');
+s2 = scatter([], [], 60, c_sens, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+s3 = scatter([], [], 60, c_act,  'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+s4 = scatter([], [], 80, c_both, 'o', 'filled', 'MarkerEdgeColor', 'k',    'LineWidth', 0.9);
+if ~isempty(sensOnlyNodes_sh)
+    scatter(nodePos_sh(sensOnlyNodes_sh,1), nodePos_sh(sensOnlyNodes_sh,2), 60, ...
+        c_sens, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+end
+if ~isempty(actOnlyNodes_sh)
+    scatter(nodePos_sh(actOnlyNodes_sh,1), nodePos_sh(actOnlyNodes_sh,2), 60, ...
+        c_act, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.7);
+end
+if ~isempty(bothNodes_sh)
+    scatter(nodePos_sh(bothNodes_sh,1), nodePos_sh(bothNodes_sh,2), 80, ...
+        c_both, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
+end
 
 title('(f) IEEE 13-bus EA controller', 'FontSize', titFS, 'Interpreter', 'latex');
+legend([s1, s2, s3, s4], {'Inactive', 'Sensor', 'Actuator', 'Both'}, ...
+    'Location', 'best', 'FontSize', legFS);
 
 exportgraphics(fig1, fullfile(outDir, 'perf_bounds_convergence.pdf'), 'ContentType', 'vector');
 saveas(fig1, fullfile(outDir, 'perf_bounds_convergence.png'));
@@ -831,9 +916,9 @@ save(fullfile(plotDir, 'fig_data.mat'), ...
     'eaCurves', 'denseCostRef', 'convGenDense', 'convGenDiag', ...
     'meanTotal', 'meanPerf', 'meanStruct', ...
     'meanNnz', 'nAct_all', 'nSens_all', ...
-    'meanPerfTrunc', 'meanCompTrunc', 'meanNnzTrunc', ...
+    'meanPerfTrunc', 'meanCompTrunc', 'meanNnzTrunc', 'trunc_stable_grid', ...
     'adjMtx_all', 'K_ea_all', 'actuatedNodes_all', ...
-    'shin_ea_hist', 'shin_dense_comp', 'shin_diag_comp_ratio', 'shin_trunc_comp_ratio', ...
+    'shin_ea_hist', 'shin_dense_comp', 'shin_diag_comp_ratio', 'shin_trunc_comp_ratio', 'shin_trunc_stable', ...
     'busInfo', 'K_ea_shin', 'n_shin', ...
     'J_diag_shin_ratio', 'J_perf_trunc_ieee13', 'J_comp_trunc_ieee13', ...
     'J_mesh_perf_mean', 'spar_mesh_dense', 'spar_mesh_ea', 'spar_mesh_diag', 'spar_trunc_ieee13', ...

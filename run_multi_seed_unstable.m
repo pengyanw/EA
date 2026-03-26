@@ -15,7 +15,7 @@ Ts             = 0.2;
 actDensity     = 1;
 topoSeed       = 10;
 
-eaSeeds  = [1 10];
+eaSeeds  = [1 10 15 20 25 30 35 40 45 50];
 numSeeds = length(eaSeeds);
 
 ea_params.popSize  = 20;
