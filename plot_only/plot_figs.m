@@ -163,7 +163,7 @@ else
     text(maxGen*0.7, max(mu_sh)*0.85, 'Trunc: Unstable', 'Color', cb_trunc, ...
         'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
 end
-
+hLB_sh = plot(gens, LB_sh, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
 xlabel('Generation', 'FontSize', labFS);
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
 legH_sh = [hEA_sh, hDens_sh];
