@@ -71,7 +71,7 @@ adjMtx_all       = cell(nGrid, 1);
 K_ea_all         = cell(nGrid, 1);
 actuatedNodes_all = cell(nGrid, 1);
 
-shin_kappa = 3;   % locality radius for K-truncation (shared by grid and IEEE 13-bus)
+shin_kappa = 1;   % locality radius for K-truncation (shared by grid and IEEE 13-bus)
 
 %% ===================== Main Loop =====================
 for s = 1:numSeeds
@@ -109,10 +109,11 @@ for s = 1:numSeeds
         Is_grid = cell(numNodes, 1);
         Js_grid = cell(numNodes, 1);
         for ii = 1:numNodes
-            Is_grid{ii} = [ii, numNodes + ii];  % theta_i, omega_i state columns
+            Is_grid{ii} = [2*ii-1,  2*ii];  % theta_i, omega_i state columns
         end
         for jj = 1:Nu
-            Js_grid{actuatedNodes(jj)} = jj;    % node k → control row jj
+            %Js_grid{actuatedNodes(jj)} = jj;    % node k → control row jj
+            Js_grid{jj} = jj;    % node k → control row jj
         end
         prob_grid = struct('name', 'grid');      % → unweighted hop distances
         K_trunc_grid    = truncate(K_full, G_grid, Is_grid, Js_grid, shin_kappa, prob_grid);
@@ -359,11 +360,11 @@ for g = 1:nGrid
         legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal'};
         if all(trunc_stable_grid(g, :))
             legHandles(end+1) = hTrunc;
-            legLabels{end+1}  = '$\kappa=3$ Trunc.';
+            legLabels{end+1}  = '$\kappa=1$ Trunc.';
         end
         if showLB
             legHandles(end+1) = hLB;
-            legLabels{end+1}  = 'LB (Eq.~49)';
+            legLabels{end+1}  = 'Conv';
         end
         legend(legHandles, legLabels, 'Location', 'northeast', ...
             'FontSize', legFS, 'Interpreter', 'latex');
@@ -392,7 +393,7 @@ save(fullfile(outDir, 'perf_bounds_analysis.mat'), ...
 fprintf('\nResults saved to %s\n', outDir);
 
 
-%% ========= Section: IEEE 13-Bus System — EA vs κ=2 Truncation =========
+%% ========= Section: IEEE 13-Bus System — EA vs κ=1 Truncation =========
 % IEEE 13-bus power system (swing-equation model, Ts=0.2 s)
 %   13 buses, Nx=26 states (angle + frequency), Nu=13 (full actuation)
 %
@@ -476,7 +477,7 @@ for si = 1:nShinSys
     J_diag_shin_n = cost_EA(A_shin, B_shin, Q_shin, R_shin, K_diag_shin, J_dense_shin, 0);
     shin_diag_comp_ratio = J_diag_shin_n / shin_dense_comp(si);
 
-    % ---- Method 2: κ=2 Truncation ----
+    % ---- Method 2: κ=1 Truncation ----
     K_trunc_shin = truncate(K_dense_shin, G_shin, Is_shin, Js_shin, shin_kappa, prob_shin);
     rho_trunc    = max(abs(eig(A_shin + B_shin * K_trunc_shin)));
     shin_trunc_stable(si) = (rho_trunc < 1.0);
@@ -703,6 +704,18 @@ else
         'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
 end
 
+% Exponential lower bound — Eq. (49)
+hLB_sh = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);  % sentinel
+if showLB
+    JR_vec_sh  = arrayfun(@(ss) shin_ea_hist{si_m,ss}.bestCost(end), 1:nShinSeeds);
+    A0_vec_sh  = arrayfun(@(ss) shin_ea_hist{si_m,ss}.bestCost(1),   1:nShinSeeds) - JR_vec_sh;
+    JR_star_sh = mean(JR_vec_sh);
+    A0_sh      = max(mean(A0_vec_sh), 0);
+    LB_sh      = (JR_star_sh + A0_sh * exp(-lb_lambda * gens)) / Jref_sh;
+    delete(hLB_sh);
+    hLB_sh = plot(gens, LB_sh, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+end
+
 xlabel('Generation', 'FontSize', labFS);
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
 legH_sh = [hEA_sh, hDens_sh];
@@ -714,6 +727,10 @@ end
 if shin_trunc_stable(si_m)
     legH_sh(end+1) = hTrunc_sh;
     legL_sh{end+1} = '$\kappa=2$ Trunc.';
+end
+if showLB
+    legH_sh(end+1) = hLB_sh;
+    legL_sh{end+1} = 'LB (Eq.~49)';
 end
 legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
 grid on; box on;
