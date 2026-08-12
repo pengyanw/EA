@@ -1,147 +1,74 @@
-# README
+# EA co-design of actuators, sensors and communication
 
-## 📌 Project Overview
+Code for *An Evolutionary Algorithm for Actuator-Sensor-Communication Co-Design
+in Distributed Control* (Wu and Li, CDC 2026).
 
-This project implements an **Evolutionary Algorithm (EA)** for **LQR controller co-design**.  
-The objective is to balance **control performance (LQR cost)** and **hardware efficiency (number of communication links)**.
+Given a plant `(A, B)` and weights `Q, R`, the algorithm synthesises the dense
+LQR gain `K_d` once and then searches for the best **pruning** of it, trading LQ
+performance against the number of actuators, sensors and communication links:
 
-The algorithm automatically tunes:
+```
+J_EA(theta) = J_LQR(K_s(theta)) / J_LQR(K_d)
+            + w_a N_a(K) + w_s N_s(K) + w_c N_c(K)
+```
 
-- The diagonal entries of the state-weighting matrix \(Q\)
-- The diagonal entries of the control-weighting matrix \(R\)
-- The number of active communication links in the sparse controller \(K\)
+The search variable is `theta = [ell, a, s]`: a link count `ell` selecting the
+`ell` largest entries of `K_d`, an actuator mask `a`, and a sensor mask `s`.
 
-The result is a **sparse LQR controller** that stabilizes the system while minimizing cost.
+## Requirements
 
----
+MATLAB with the Control System Toolbox (`dlqr`, `dlyap`).
 
-## ⚙️ Inputs
+**External dependency.** The grid plant generators `generate_grid_topology.m`
+and `generate_grid_plant.m` are not in this repository; they come from the SLS
+toolbox, `sls-code/matlab/shared_tools/plant_generators`. Put that directory on
+the MATLAB path before running anything under `results/`.
 
-### 1. System Parameters
+## Entry points
 
-- `gridSize`: Defines an \(N \times N\) grid of nodes
-- `connectThresh`: Connectivity threshold for graph topology
-- `Ts`: Sampling time
-- `actDensity`: Ratio of actuated nodes
-- `seed`: Random seed for reproducibility
+| Script | Produces |
+|---|---|
+| `analysis_perf_bounds.m` | Fig. 1 (three plants, EA vs greedy vs baselines) and Fig. 3 (scaling), plus `plot_only/fig_data.mat` |
+| `run_multi_seed_unstable.m` | Fig. 2 (Gershgorin repair on an open-loop unstable plant) |
+| `plot_only/plot_figs.m` | redraws Fig. 1 from the saved `.mat` without re-running the search |
+| `plot_only/plot_fig2_pdf.m` | redraws Fig. 2 likewise |
 
-### 2. EA Parameters
+## Core functions (`EA functions/`)
 
-- `popSize`: Population size
-- `maxGen`: Maximum generations
-- `pMutate`: Mutation probability per gene
-- `pCross`: Crossover probability
-- `nTop`: Number of elites preserved each generation
-- `alpha`: Weight between performance cost and hardware cost
-- `max_Q_val`, `min_Q_val`: Bounds for diagonal entries of \(Q\)
-- `max_R_val`, `min_R_val`: Bounds for diagonal entries of \(R\)
-- `min_links`, `max_links`: Bounds for number of nonzero entries in \(K\)
+| File | Role |
+|---|---|
+| `ea_lqr_codesign_gershgorin.m` | Algorithm 1, the EA itself |
+| `gersgorin_stabilize_K.m` | Algorithm 2, the repair for unstable genes |
+| `greedy_prune.m` | Algorithm 3, the monotone greedy baseline |
+| `gap_predictor.m` | the certified optimality gap of Theorem 4 |
+| `get_lqr_cost.m` | `trace(P Sigma)` via one discrete Lyapunov solve; `Inf` if unstable |
+| `truncate.m` | the kappa-hop truncation baseline |
+| `build_ieee13bus_system.m` | the IEEE 13-bus plant |
 
----
+`cost_funcs/cost_EA.m` assembles `J_EA` from the LQ term and the structural
+penalties.
 
-## 🛠️ Key Functions
+## Options that matter
 
-- `generate_grid_topology(gridSize, connectThresh, seed)`  
-  Generates graph topology, node coordinates, and system parameters.
+Set on the `options` struct passed to `ea_lqr_codesign_gershgorin`:
 
-- `plot_graph(adjMtx, nodeCoords, color)`  
-  Visualizes the network topology.
+- `linkDecode` — `'paper'` decodes as Section III does; `'canonical'` (default in
+  the figure scripts) additionally resets the gene's `ell` to the deepest rank
+  still present, which costs nothing and restores a search gradient on `ell`.
+- `cacheElites` — reuse the elites' costs instead of recomputing them. Exact
+  when the repair is off, and roughly halves the runtime. Defaults to
+  `~useGersRepair`, because a successful repair rewrites the elite's gene.
+- `initMasks` — `'near-dense'` (Bernoulli(0.99), the historical behaviour),
+  `'uniform-half'`, or `'half-split'`.
+- `useGersRepair` — enable Algorithm 2.
 
-- `generate_grid_plant(actuatedNodes, adjMtx, susceptMtx, inertiasInv, dampings, Ts)`  
-  Builds the discrete-time state-space model.
-
-- `dlqr(A, B, Q, R)`  
-  Solves for the dense LQR controller.
-
-- `get_lqr_cost(A, B, Q, R, K)`  
-  Evaluates the closed-loop LQR cost for a given controller.
-
----
-
-## 🔄 Algorithm Workflow
-
-The optimization follows an **Evolutionary Algorithm (EA)** with an **alternating method** idea (fix \(P\), optimize \(K\); then fix \(K\), optimize \(P\)).
-
-1. **Initialization**
-
-   - Each chromosome encodes:  
-     \([ \text{diag}(Q), \text{diag}(R), \text{num\_links} ]\)
-
-2. **Fitness Evaluation**
-
-   - Decode chromosome into \(Q, R, \text{num_links}\)
-   - Compute dense controller \(K\_{dense}\) using LQR
-   - Sparsify \(K\_{dense}\) to keep `num_links` largest entries
-   - Check stability (\(\rho(A+B K\_{sparse}) < 1\))
-   - If stable: compute cost  
-     \[
-     J = \alpha \frac{J*{\text{LQR}}}{J*{\text{BM}}} \;+\; (1-\alpha)\frac{\text{nnz}(K)}{\text{max_links}}
-     \]
-   - If unstable: assign a large penalty
-
-3. **Selection and Reproduction**
-
-   - Sort population by fitness
-   - Keep `nTop` elites
-   - Generate new individuals via crossover and mutation
-
-4. **Iteration**
-
-   - Track:
-     - Best cost per generation
-     - Average stable cost
-     - Number of unstable individuals
-     - \(\|K*{new}-K*{old}\| / \|K\_{old}\|\)
-
-5. **Results**
-   - Report best solution, generation index, and improvement over benchmark
-   - Save evolution plots
-
----
-
-## 📤 Outputs
-
-### Numerical Results
-
-- `Best cost found`: Minimum cost achieved
-- `Best generation`: Generation where best solution occurred
-- `Advantage over benchmark`: Relative improvement vs. dense LQR baseline
-
-### Figures
-
-All figures saved under `figures/`:
-
-- `evo_bestcost_grid{gridSize}seed{seed}.png`  
-  Best cost evolution
-- `evo_avgcost_grid{gridSize}seed{seed}.png`  
-  Average stable cost evolution
-- `unstable_count_grid{gridSize}seed{seed}.png`  
-  Number of unstable individuals per generation
-
----
-
-## Gershgorin Repair: Effect on Convergence
-
-The Gershgorin disk repair steers the population away from unstable regions early in the search, which has a compounding effect on cost convergence. During the first ~50 generations, the repair fires frequently (10–16 repairs/gen), quickly driving the unstable-individual count from ~10 down to near zero by generation 70; once the population stabilizes, repair activity ceases almost entirely and the EA exploits the feasible region more efficiently. This accelerated feasibility leads to a strictly lower final best cost (~20.8 vs. ~21.3 for the no-repair baseline), demonstrating that eliminating instability penalties allows selection pressure to focus on cost reduction rather than survival.
-
----
-
-## 📊 Example Run
+## Reproducing the figures
 
 ```matlab
-clear; clc; close all;
 addpath(genpath(pwd));
-
-% Configure system and EA parameters
-gridSize = 5; connectThresh = 0.5; Ts = 0.2; actDensity = 1; seed = 17;
-popSize = 20; maxGen = 150; alpha = 0.5;
-
-% Run optimization
-main_script;  % your provided script
-
-% Example output:
-% Benchmark LQR cost (dense controller): 123.456
-% Gen 100: Best Cost=0.85, Avg Cost=1.20, Unstable=3/20
-% Best cost found: 0.80 at generation 120
-% Best advantage over benchmark: 35%
+addpath('<path to>/sls-code/matlab/shared_tools/plant_generators');
+analysis_perf_bounds     % Fig. 1 and Fig. 3
+run_multi_seed_unstable  % Fig. 2
 ```
+
+Outputs land in `results/`; the paper sources are under `paper/`.

@@ -1,7 +1,7 @@
 function [result, history] = ea_lqr_codesign_gershgorin(A, B, ea_params, options)
-% EA_LQR_CODESIGN_NEW  Evolutionary sparse LQR co-design (improved)
+% EA_LQR_CODESIGN_GERSHGORIN  Evolutionary sparse LQR co-design (Algorithm 1)
 %
-% Key differences from ea_lqr_codesign:
+% Design points:
 %   1) Q, R fixed to benchmark values (dlqr computed once, not per individual)
 %   2) Gene = [n_links, b_act, b_sens] -- no Q/R in chromosome
 %   3) Softmax parent selection: P(i) = exp(-J_i / tau) / Z

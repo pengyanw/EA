@@ -65,19 +65,13 @@ eaBudget = eaEvalSchedule(end);   % total EA evaluations, for the Evals column
 
 alpha = ea_params.alpha;
 
-%% Greedy baseline variant (Fig 1, B2 comparison)
-% @greedy_prune     -- pruning only, no backtracking (monotone / backward
-%                      elimination). This is what Fig 1 reports.
-% @greedy_codesign  -- bidirectional flips, ell may also increase; terminates at
-%                      a 1-flip local optimum. Kept for reference; swap here.
+%% Greedy baseline (Fig 1, "why an EA rather than something simpler?")
+% Pruning only, no backtracking -- monotone backward elimination.
 greedyFcn = @greedy_prune;
 
 %% Bound display options (for Fig 1)
-% Show the per-generation convergence prediction of Theorem 1 (Section IV),
-% computed by EA functions/Phi_predictor.m. All of its constants (Upsilon, rho,
-% L_J, h*, h_t) are estimated from (A, B, K_d) and the graph -- there is no
-% free parameter to tune. The prediction is only non-trivial while
-% h_{t-1} > h*; Phi_predictor prints how many generations satisfy that.
+% Show the certified optimality gap of Theorem 4 (Section IV), computed by
+% EA functions/gap_predictor.m. Every constant it needs is measured from the run.
 % Set false to omit the amber curve and its shaded band from every panel of
 % Fig. 1 (and to skip the gap_predictor calls that produce them). LB_grid and
 % LB_sh are then saved as NaN, which plot_only/plot_figs.m already guards on, so
@@ -114,10 +108,10 @@ adjMtx_all       = cell(nGrid, 1);
 K_ea_all         = cell(nGrid, 1);
 actuatedNodes_all = cell(nGrid, 1);
 
-% Inputs required by Phi_predictor (the Theorem 1 convergence prediction).
+% Inputs required by gap_predictor (the Theorem 4 certified gap).
 % K_full_all holds the THRESHOLDED dense gain K_d -- the same matrix the EA
-% sorts and truncates (ea_lqr_codesign_gershgorin.m). h(ell) in Definition 2(c)
-% is computed from this support, so it must not be the raw dlqr gain.
+% sorts and truncates (ea_lqr_codesign_gershgorin.m), so it must not be the raw
+% dlqr gain.
 % Indexed by (grid, seed), NOT by grid alone: every seed builds a DIFFERENT plant
 % (its own topology and actuator placement), so a per-grid cache assigned inside
 % the seed loop retains only the last seed's plant. Pairing that with seed s's
@@ -431,12 +425,11 @@ for g = 1:nGrid
     %
     % History of this curve. It was originally J_R* + A0*exp(-0.05*t) with J_R*
     % and A0 read off the endpoints of the EA curve it was plotted against -- a
-    % functional form from a theorem in the superseded March draft, with a
-    % lambda that was not falsifiable. It was then replaced by Phi_predictor,
-    % the link certificate of the submitted Theorem 1; that is honest but
-    % certifies ZERO generations (h_t == 1 against h* ~ 2), because the link
-    % coordinate is inert (ell moves 0 of 750 available on the 7x7 grid) and the
-    % whole cost reduction comes from the masks.
+    % functional form from a superseded draft, with a lambda that was not
+    % falsifiable. The link certificate of the submitted Theorem 1 replaced it;
+    % that was honest but certified ZERO generations (h_t == 1 against h* ~ 2),
+    % because the link coordinate was inert before the canonicalisation on
+    % line 6 of Algorithm 1 and the whole cost reduction came from the masks.
     %
     % What is plotted now is the lower envelope
     %     J_EA(theta*_t) - [ M(S*_t) + (1/gamma - 1) M(Omega\S*_t) ]
@@ -870,8 +863,8 @@ end
 % Certified optimality gap of Theorem C -- same treatment as the grid panels
 % above (see the comment there for the history of this curve). gap_predictor
 % needs no graph and no state-to-node map: it reads the actuator structure off
-% the elite gene directly, so the blocked IEEE 13-bus state ordering that
-% Phi_predictor had to be told about is irrelevant here.
+% the elite gene directly, so the blocked IEEE 13-bus state ordering is
+% irrelevant here.
 % Preallocated unconditionally: the save() at the end of this script writes
 % LB_sh whether or not the curve was computed, so leaving it undefined when
 % showLB is false made the whole run fail at the last line.

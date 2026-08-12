@@ -11,10 +11,9 @@
 %   plot_figs
 %
 % This script only draws; every curve is read from the .mat files. LB_grid / LB_sh
-% now hold the Theorem C' certified LOWER BOUND on min_a J_EA (computed once in
-% analysis_perf_bounds.m via EA functions/gap_predictor.m), not the superseded
-% Theorem 1 convergence prediction of Phi_predictor.m -- so there is no second
-% copy of the formula here to drift out of sync.
+% now hold the Theorem 4 certified LOWER BOUND on min_a J_EA, computed once in
+% analysis_perf_bounds.m via EA functions/gap_predictor.m -- so there is no
+% second copy of the formula here to drift out of sync.
 
 clear; clc; close all;
 load('fig_data.mat');

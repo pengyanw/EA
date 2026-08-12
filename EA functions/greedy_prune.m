@@ -19,14 +19,12 @@ function [best, hist] = greedy_prune(A, B, ea_params, options)
 %   over the whole run -- this is classical backward elimination, and it is the
 %   procedure the "greedy pruning" discussion in Section IV actually refers to.
 %
-%   Difference from GREEDY_CODESIGN (kept for reference): that variant flips
-%   masks in BOTH directions and allows ell to increase, so it can backtrack and
-%   terminates at a 1-flip local optimum. GREEDY_PRUNE cannot backtrack, so its
-%   fixed point is only "no single removal improves" -- a strictly weaker
-%   stopping condition. Consequently the slack Xi in Theorem 4 need not vanish
-%   at a greedy_prune output, whereas it can at a greedy_codesign output.
+%   Because it cannot backtrack, its fixed point is only "no single removal
+%   improves" -- strictly weaker than a 1-flip local optimum, which also requires
+%   that no single ADDITION improves. Consequently the slack Xi of Theorem 4 need
+%   not vanish at a greedy_prune output, whereas it can at an EA output.
 %
-%   Fairness controls, all deliberate and identical to GREEDY_CODESIGN:
+%   Fairness controls, all deliberate:
 %     - one cost oracle, transcribed from ea_lqr_codesign_gershgorin.m:206-243,
 %       including the Gershgorin repair branch when options.useGersRepair is set;
 %     - NO memoisation. The EA re-evaluates its elites every generation, so
