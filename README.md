@@ -17,12 +17,21 @@ The search variable is `theta = [ell, a, s]`: a link count `ell` selecting the
 
 ## Requirements
 
-MATLAB with the Control System Toolbox (`dlqr`, `dlyap`).
+MATLAB with the Control System Toolbox (`dlqr`, `dlyap`). Nothing else: the
+repository is self-contained.
 
-**External dependency.** The grid plant generators `generate_grid_topology.m`
-and `generate_grid_plant.m` are not in this repository; they come from the SLS
-toolbox, `sls-code/matlab/shared_tools/plant_generators`. Put that directory on
-the MATLAB path before running anything under `results/`.
+**Vendored code.** `EA functions/` contains five files copied verbatim from
+[SLS-MATLAB](https://github.com/sls-caltech/sls-code) so that the simulations
+run without an external checkout: `generate_grid_topology.m`,
+`generate_grid_plant.m`, `LTISystem.m`, `sls_error.m` and `mpc_error.m`. Each
+carries a provenance header. Please cite
+
+    @misc{Li2019_SLSMatlab,
+      title  = {{SLS-MATLAB}: Matlab Toolbox for System Level Synthesis},
+      author = {Li, Jing Shuang},
+      url    = {https://github.com/sls-caltech/sls-code},
+      year   = 2019
+    }
 
 ## Entry points
 
@@ -66,7 +75,6 @@ Set on the `options` struct passed to `ea_lqr_codesign_gershgorin`:
 
 ```matlab
 addpath(genpath(pwd));
-addpath('<path to>/sls-code/matlab/shared_tools/plant_generators');
 analysis_perf_bounds     % Fig. 1 and Fig. 3
 run_multi_seed_unstable  % Fig. 2
 ```
