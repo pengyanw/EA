@@ -10,15 +10,22 @@
 %   cd plot_only
 %   plot_figs
 %
-% Tune showLB / lb_lambda below without rerunning any EA.
+% This script only draws; every curve is read from the .mat files. LB_grid / LB_sh
+% now hold the Theorem C' certified LOWER BOUND on min_a J_EA (computed once in
+% analysis_perf_bounds.m via EA functions/gap_predictor.m), not the superseded
+% Theorem 1 convergence prediction of Phi_predictor.m -- so there is no second
+% copy of the formula here to drift out of sync.
 
 clear; clc; close all;
 load('fig_data.mat');
 U = load('fig_data_unstable.mat');   % isolated struct — avoids overwriting numSeeds, eaSeeds, etc.
 
 %% ===================== Configurable display options =====================
-showLB    = true;   % Show exponential lower bound (Eq. 49)
-lb_lambda = 0.05;   % λ; paper empirical range ≈ [0.035, 0.069] (4×4 grid)
+showLB = true;   % Show the Thm. C' certified optimality gap (Section IV)
+
+% shin_kappa and LB_grid were added to fig_data.mat later than the other fields;
+% fall back gracefully so an older .mat still plots.
+if ~exist('shin_kappa', 'var'), shin_kappa = 1; end
 
 %% ===================== Derive simple quantities =====================
 nxVec    = sysSize(:,1);
@@ -36,7 +43,9 @@ cb_ea     = [0.00 0.45 0.74];
 cb_dens   = [0.50 0.50 0.50];
 cb_diag   = [0.85 0.33 0.10];
 cb_trunc  = [0.47 0.67 0.19];
-cb_lb     = [0.93 0.69 0.13];
+cb_gd     = [0.49 0.18 0.56];   % purple — greedy baseline (B2 comparison)
+cb_lb     = [0.93 0.69 0.13];   % amber — Thm. C' certified lower envelope
+ca_lb     = [0.99 0.92 0.72];   % amber fill — the certified optimality gap
 cb_purple = [0.49 0.18 0.56];   % purple — act + sensor node
 ca_ea     = [0.75 0.85 1.00];
 barW     = 0.18;
@@ -60,6 +69,16 @@ for g = 1:nGrid
         ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
     hEA = plot(gens, mu, '-', 'Color', cb_ea, 'LineWidth', lw);
 
+    % Greedy baseline on the same budget axis (its evaluations / N_p).
+    hGD = gobjects(0);
+    if exist('gdCurves', 'var') && ~isempty(gdCurves{g, 1})
+        gdMat = zeros(maxGen, numSeeds);
+        for s = 1:numSeeds
+            gdMat(:, s) = gdCurves{g, s} / denseCostRef(g, s);
+        end
+        hGD = plot(gens, mean(gdMat, 2), '-', 'Color', cb_gd, 'LineWidth', lw*0.8);
+    end
+
     hDens = yline(1.0, '--', 'Color', cb_dens, 'LineWidth', 2);
 
     J_diag_n = meanTotal(g,2) / Jref;
@@ -80,17 +99,15 @@ for g = 1:nGrid
             'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
     end
 
-    % Exponential lower bound: J_min(t) >= J_R* + A0*exp(-lambda*t)  [Eq. (49)]
+    % Theorem C' certified lower bound on min_a J_EA (precomputed, see header).
+    % Shade between it and the EA curve: that band is the certified optimality gap.
     hLB = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
-    if showLB
-        lam_g = lb_lambda;
-        JR_vec  = arrayfun(@(s) eaCurves{g,s}(end), 1:numSeeds);
-        A0_vec  = arrayfun(@(s) eaCurves{g,s}(1),   1:numSeeds) - JR_vec;
-        JR_star = mean(JR_vec);
-        A0_g    = max(mean(A0_vec), 0);
-        LB_curve = (JR_star + A0_g * exp(-lam_g * gens)) / Jref;
+    if showLB && exist('LB_grid', 'var') && any(isfinite(LB_grid(:, g)))
         delete(hLB);
-        hLB = plot(gens, LB_curve, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+        fill([gens; flipud(gens)], [mu; flipud(LB_grid(:, g))], ca_lb, ...
+            'EdgeColor', 'none', 'FaceAlpha', 0.55, 'HandleVisibility', 'off');
+        hLB = plot(gens, LB_grid(:, g), '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+        uistack(hEA, 'top');
     end
 
     % Mark convergence generation (mean)
@@ -100,7 +117,9 @@ for g = 1:nGrid
             'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
     end
 
-    xlabel('Generation', 'FontSize', labFS);
+    % Common budget axis: the EA spends N_p evaluations per generation, and the
+    % greedy incumbent is sampled at N_p*g, so both curves share this scale.
+    xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
     if g == 1
         ylabel('$J \;/\; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
     end
@@ -110,15 +129,17 @@ for g = 1:nGrid
     grid on; box on;
 
     if g == 1 || g == nGrid
-        legHandles = [hEA, hDens, hDiag];
-        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal'};
+        legHandles = hEA;  legLabels = {'EA-LQR'};
+        if ~isempty(hGD), legHandles(end+1) = hGD; legLabels{end+1} = 'Greedy'; end
+        legHandles = [legHandles, hDens, hDiag];
+        legLabels  = [legLabels, {'Dense ($=1$)', 'Diagonal'}];
         if all(trunc_stable_grid(g, :))
             legHandles(end+1) = hTrunc;
-            legLabels{end+1}  = '$\kappa=3$ Trunc.';
+            legLabels{end+1}  = sprintf('$\\kappa=%d$ Trunc.', shin_kappa);
         end
         if showLB
             legHandles(end+1) = hLB;
-            legLabels{end+1}  = 'LB (Eq.~49)';
+            legLabels{end+1}  = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
         end
         legend(legHandles, legLabels, 'Location', 'northeast', ...
             'FontSize', legFS, 'Interpreter', 'latex');
@@ -144,6 +165,10 @@ sd_sh = std(normMat_sh, 0, 2);
 fill([gens; flipud(gens)], [mu_sh+sd_sh; flipud(max(mu_sh-sd_sh, 0))], ...
     ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
 hEA_sh   = plot(gens, mu_sh, '-',  'Color', cb_ea,   'LineWidth', lw);
+hGD_sh   = gobjects(0);
+if exist('gdCurve_sh', 'var') && ~isempty(gdCurve_sh)
+    hGD_sh = plot(gens, gdCurve_sh / Jref_sh, '-', 'Color', cb_gd, 'LineWidth', lw*0.8);
+end
 hDens_sh = yline(1.0, '--', 'Color', cb_dens, 'LineWidth', 2);
 
 J_diag_sh_n = shin_diag_comp_ratio;
@@ -163,18 +188,30 @@ else
     text(maxGen*0.7, max(mu_sh)*0.85, 'Trunc: Unstable', 'Color', cb_trunc, ...
         'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
 end
-hLB_sh = plot(gens, LB_sh, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
-xlabel('Generation', 'FontSize', labFS);
+hLB_sh = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+if showLB && exist('LB_sh', 'var') && any(isfinite(LB_sh))
+    delete(hLB_sh);
+    fill([gens; flipud(gens)], [mu_sh; flipud(LB_sh)], ca_lb, ...
+        'EdgeColor', 'none', 'FaceAlpha', 0.55, 'HandleVisibility', 'off');
+    hLB_sh = plot(gens, LB_sh, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+    uistack(hEA_sh, 'top');
+end
+xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
-legH_sh = [hEA_sh, hDens_sh];
-legL_sh = {'EA-LQR', 'Dense ($=1$)'};
+legH_sh = hEA_sh;  legL_sh = {'EA-LQR'};
+if ~isempty(hGD_sh), legH_sh(end+1) = hGD_sh; legL_sh{end+1} = 'Greedy'; end
+legH_sh(end+1) = hDens_sh;  legL_sh{end+1} = 'Dense ($=1$)';
 if J_diag_sh_n < 1e4
     legH_sh(end+1) = hDiag_sh;
     legL_sh{end+1} = 'Diagonal';
 end
 if shin_trunc_stable(si_m)
     legH_sh(end+1) = hTrunc_sh;
-    legL_sh{end+1} = '$\kappa=2$ Trunc.';
+    legL_sh{end+1} = sprintf('$\\kappa=%d$ Trunc.', shin_kappa);
+end
+if showLB
+    legH_sh(end+1) = hLB_sh;
+    legL_sh{end+1} = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
 end
 legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
 grid on; box on;

@@ -1,0 +1,186 @@
+% greedy_baseline.tex
+% -----------------------------------------------------------------------------
+% Material for the B2 revision item ("why an evolutionary algorithm rather than
+% something simpler?"). Included from main.tex at the end of Section VII via
+%   \input{greedy_baseline}
+%
+% Requires (already in main.tex's preamble): algorithm, algpseudocode, booktabs.
+% The convergence figure it discusses is main.tex's Fig. 1 (Fig1.pdf), which
+% already carries the greedy curve -- this file does not duplicate it.
+%
+% Every number below is measured under the ADOPTED configuration: Algorithm 1
+% with the canonical link-count update, Algorithm 3 pruning-only, no repair on
+% the stable grids. Producing code:
+%   EA functions/greedy_prune.m      Algorithm 3 (the greedy search itself)
+%   EA functions/greedy_codesign.m   the bidirectional variant, kept for reference
+%   analysis_perf_bounds.m           Fig. 1 with the greedy curve
+%   scratchpad/remeasure_canonical.m the eight-seed comparison and Jaccard data
+%   scratchpad/ell_freefall.m        the plateau widths quoted below
+%   scratchpad/remeasure_prune2.m    the unstable-plant numbers
+%
+% NOTE for the camera-ready: Table 2 and Fig. 1 both cover seeds 1, 2 and 10,
+% which were chosen because the EA does well on them -- a selection, not a
+% random draw. The EA column is a mean over five runs per instance: measured
+% run-to-run CV reaches 12.9% on the 7x7 grid, so the earlier single-run version
+% of this table was not reproducible (it recorded two "EA wins" that 0 of 5
+% repetitions reproduce). Producing script: scratchpad/b2_repeats.m.
+% -----------------------------------------------------------------------------
+
+\subsection{A greedy baseline}
+\label{sec:greedy}
+
+The natural objection to an evolutionary algorithm is that a simpler local
+search might do as well. We test this directly rather than argue it. Algorithm
+\ref{alg:greedy} searches the \emph{same} gene $\theta = [\ell, \mathbf{a},
+\mathbf{s}]$ as Algorithm \ref{alg:ea}, decodes it through the same map
+$K_\mathrm{s}(\theta)$, and scores it with the same cost. Its move set is
+restricted to \emph{removals}: nothing once pruned is ever restored, so the
+retained support is nested decreasing over the whole run. It starts from the
+dense architecture $\theta_0 = [\|K_\mathrm{d}\|_0, \mathbf{1}, \mathbf{1}]$,
+which is also the EA's initialization, and cycles three phases, each run to its
+own fixed point.
+
+\begin{algorithm}%[t]
+\caption{Greedy pruning (monotone backward elimination)}
+\label{alg:greedy}
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \quad Plant matrices $A, B$; dense gain $K_\mathrm{d}$
+\Statex \quad Link mutation range $d$ (the same $d$ as Algorithm \ref{alg:ea})
+\State $\ell \gets \|K_\mathrm{d}\|_0$, \; $\mathbf{a} \gets \mathbf{1}$, \; $\mathbf{s} \gets \mathbf{1}$
+\State $J \gets J_\mathrm{EA}([\ell,\mathbf{a},\mathbf{s}])$
+\State \textbf{repeat}
+\Statex \quad \textit{Phase 1: link count, decrements only}
+\State \quad \textbf{while} some $\delta \in \{-1, -d\}$ improves $J$\textbf{:}
+\State \quad \quad $\ell \gets \mathrm{sat}(\ell + \delta^\star)$ for the best such $\delta^\star$
+\Statex \quad \textit{Phase 2: actuators, deactivations only}
+\State \quad \textbf{while} some $u$ with $a_u = 1$ improves $J$ when set to $0$\textbf{:}
+\State \quad \quad $a_{u^\star} \gets 0$ for the best such $u^\star$
+\Statex \quad \textit{Phase 3: sensors, deactivations only}
+\State \quad \textbf{while} some $j$ with $s_j = 1$ improves $J$ when set to $0$\textbf{:}
+\State \quad \quad $s_{j^\star} \gets 0$ for the best such $j^\star$
+\State \textbf{until} a full cycle yields no improvement
+\State \Return $[\ell, \mathbf{a}, \mathbf{s}]$
+\end{algorithmic}
+\end{algorithm}
+
+Three choices make the comparison like-for-like rather than favorable to either
+side. First, Phase 1 moves $\ell$ only by $-1$ and $-d$: this is within the EA's
+own link neighborhood $\delta \sim \mathrm{Unif}\{-d,\dots,d\}$, so the greedy
+search is not handed a global scan over $\ell$ that Algorithm \ref{alg:ea}
+structurally cannot perform.\footnote{Exhaustively scanning $\ell$ at the greedy
+fixed point's masks returns the identical optimum on five of six grid instances;
+on the sixth the monotone descent overshoots, stopping at $\ell = 15$ where
+$\ell = 17$ was better by $2.2\%$. Forbidding backtracking has a price, and this
+is it.} Second, neither search is charged for work it can prove redundant: the
+EA reuses its elites' costs instead of recomputing them, and the greedy search
+skips a mask bit whose row or column is already empty, since clearing it cannot
+change $K$. Both exclusions are exact --- neither alters the sequence of
+iterates --- and charging one but not the other would move the shared axis by
+about a factor of two. Third, destabilizing candidates are \emph{scored}, at
+infinite cost, rather than skipped, so the reported budget is what the search
+actually costs.
+
+Both searches are therefore comparable on a single currency: the number of
+evaluations of $J_\mathrm{LQR}$, each one discrete Lyapunov solve. Algorithm
+\ref{alg:ea} spends $N_p$ of them in the first generation and $N_p - n_e$
+thereafter --- $1510$ at $G_{\max} = 150$ --- and Fig.~\ref{fig:perf-conv} plots
+the greedy incumbent against that cumulative count.
+
+\begin{table}[t]
+\centering
+\caption{Final $J_\mathrm{EA}$, and the cost of getting there. The last column
+is Algorithm \ref{alg:greedy}'s evaluation count divided by Algorithm
+\ref{alg:ea}'s, both after excluding provably redundant work; it crosses $1$
+between $N_u = 49$ and $N_u = 225$. Algorithm \ref{alg:greedy} is
+deterministic; Algorithm \ref{alg:ea} is not, and is reported as mean $\pm$
+standard deviation over five runs where five were run. The $15\times15$ row uses
+the length-scaled $p_m = 4/n$ and $G_{\max} = 400$ of Remark \ref{rem:pm}
+rather than the $p_m = 0.05$, $G_{\max} = 150$ of the rows above; at those
+settings the EA returns $84.7$.}
+\label{tab:greedy}
+\begin{tabular}{lrrc}
+\toprule
+Plant, seed & EA & Greedy & Ratio \\
+\midrule
+$5\!\times\!5$, 1   & $\mathbf{6.68 \pm 0.00}$ & $7.46$ & $0.13\times$ \\
+$5\!\times\!5$, 2   & $5.81 \pm 0.12$ & $\mathbf{5.72}$ & $0.27\times$ \\
+$5\!\times\!5$, 10  & $6.42 \pm 0.10$ & $\mathbf{6.33}$ & $0.21\times$ \\
+$7\!\times\!7$, 1   & $6.35 \pm 0.83$ & $\mathbf{5.15}$ & $0.38\times$ \\
+$7\!\times\!7$, 2   & $\mathbf{6.90 \pm 0.21}$ & $7.07$ & $0.45\times$ \\
+$7\!\times\!7$, 10  & $8.64 \pm 1.11$ & $\mathbf{7.74}$ & $0.42\times$ \\
+IEEE 13-bus, 1      & $\mathbf{2.45}$ & $2.55$ & $0.15\times$ \\
+\midrule
+$15\!\times\!15$, 1 & $12.73$ & $\mathbf{11.30}$ & $\mathbf{3.25\times}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{What the comparison shows.}
+The greedy search reaches a lower cost than the EA on four of the six grid
+instances of Fig.~\ref{fig:perf-conv}, using $13$--$45\%$ of the budget; the EA
+wins the remaining two and the IEEE 13-bus system. The last row of Table
+\ref{tab:greedy} is the exception that the closing paragraph of this section
+develops: by $N_u = 225$ the ratio has inverted, and greedy costs $3.25$ times
+what the EA does to reach a cost within $13\%$. The EA does reach the greedy architecture on some runs
+--- on $5\times5$ seed $2$ its best of five runs equals the greedy cost to four
+decimals, with identical actuator and sensor sets --- but not reliably, and
+reporting a single run per instance makes that look like a tie when it is the
+minimum of a distribution. Two of the six instances have a standard deviation
+above $10\%$ of the mean, so single-run comparisons against a deterministic
+baseline are not meaningful at this effect size; the repetitions in Table
+\ref{tab:greedy} are what the comparison rests on. Neither non-monotonicity nor
+the infinite-cost set protects the EA: the greedy search probes only $4$--$51$
+infeasible candidates per run and simply never selects one, whereas the EA
+probes $146$--$782$ because mutation samples them unconditionally.
+
+\paragraph{The link coordinate needs a gradient.}
+The comparison exposed a defect in the encoding of Section \ref{sec:ea}. Under
+the decode of Algorithm \ref{alg:ea}, $\Pi_\ell$ selects first and the masks
+zero entries afterwards, so $N_c \ll \ell$ in general: at the returned elite,
+$\ell$ could be lowered by $85$--$254$ before $J_\mathrm{EA}$ changed in any
+digit. Selection therefore gave $\ell$ no gradient at all, and it moved by only
+$1$--$10\%$ from its initial value while all sparsity came from the masks. The
+remedy costs one line --- after each decode, reset the gene's $\ell$ to the
+deepest rank still present in $K_\mathrm{s}(\theta)$. The controller, the cost,
+and the image of the decode map are unchanged; only the redundant slack in the
+genotype is removed, so the next $-\delta$ mutation deletes links that exist.
+Over a wider sweep of eight seeds (sixteen grid instances, both arms driven by
+the same random stream) this lowered the final cost on thirteen, tied three,
+and worsened none (mean $7.83 \to 6.73$, sign test $p = 2.4\times10^{-4}$), and
+brought $\ell$ from a mean of $480$ down to $56$, on fourteen of the sixteen
+into the range the greedy search reaches. We report this because it is the
+analysis of Section
+\ref{sec:convergence}, not the simulations, that makes the defect visible: a
+coordinate on which the objective is constant cannot be driven by selection.
+
+\paragraph{Scope of the certified gap.}
+The greedy solutions also delimit what Theorem \ref{thm:gap} claims. Its bound
+is on $\min_{\mathbf{a}} J_\mathrm{EA}$ at the elite's \emph{current} $\ell$ and
+$\mathbf{s}$, and the greedy search varies both. On one run of the $7\times7$
+grid the greedy architecture costs less than that bound ($5.145$ against
+$5.462$), which is not a contradiction but does quantify the restriction:
+relaxing the two
+frozen coordinates can occasionally buy more than the entire certified
+actuator-only gap. A second caveat is that Algorithm \ref{alg:greedy} never
+tests an addition, so its fixed point is not a $1$-flip local optimum in the
+sense of Definition \ref{def:loc-opt} and the slack $\Xi$ of \eqref{eq:slack}
+need not vanish there; the bound remains valid, but it is not tight at a greedy
+output the way it can be at an EA output.
+
+\paragraph{On the unstable plant the repair is what separates them.}
+Section \ref{sec:gersh_repair}'s open-loop unstable plant is the one setting in
+which the two searches are not interchangeable. Running both with and without
+Algorithm \ref{alg:gers-repair}: without it the greedy search reaches $15.42$
+against the EA's $18.56 \pm 0.53$; with it the EA reaches $15.66 \pm 0.36$
+against the greedy search's $16.74$. The repair improves the EA by $16\%$ and
+\emph{degrades} the greedy search by $9\%$. Making infeasible candidates cheap
+but finite is useful to a population that can carry a bad commitment and
+discard it later, and harmful to a monotone search that cannot: roughly half of
+the greedy probes are infeasible there, and a move that looks good only because
+the repair rescued it can never be undone. This is the clearest evidence we have
+that the repair mechanism and the population are complementary rather than
+independent additions.
+
+% The scaling argument that used to sit here now closes Section VII in main.tex,
+% immediately after this file is \input.

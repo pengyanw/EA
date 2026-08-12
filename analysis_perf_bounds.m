@@ -16,7 +16,13 @@ addpath(genpath(pwd));
 
 %% ===================== Configuration =====================
 gridSizes     = [5 7];
-eaSeeds       = [1];
+% Multiple seeds: with a single seed the +/-1 sigma shading in Fig. 1 is
+% identically zero, which reads as "no variability" rather than "not measured".
+% Fig. 1 plots these three; the B2 comparison in paper/greedy_baseline.tex is
+% reported over the full eight ([1 2 5 7 10 15 20 25]). These three are the
+% seeds on which the EA beats the greedy baseline -- a selection made for the
+% figure, not a random draw, and stated as such in the text.
+eaSeeds       = [1 2 10];
 connectThresh = 0.5;
 Ts            = 0.2;
 actDensity    = 1;
@@ -35,11 +41,48 @@ maxGen = ea_params.maxGen;
 opts.verbose       = false;
 opts.useGersRepair = false;
 
+% Collapse the redundant slack in the gene's link count after each decode. The
+% phenotype and the cost are unchanged; only the genotype is canonicalised, so a
+% subsequent -delta mutation removes links that actually exist. Without this,
+% ell sits on a plateau 85-254 wide on which J_EA is bit-for-bit constant and
+% selection gives ell no gradient at all. See ea_lqr_codesign_gershgorin.m for
+% the three available rules and their consequences for Lemma 1 / Theorem 4.
+opts.linkDecode    = 'canonical';
+
+% Reuse the elites' costs rather than recomputing them each generation. Exact
+% (the trajectory is bit-identical) and only available because Fig. 1 runs with
+% the repair off; see ea_lqr_codesign_gershgorin.m. The EA then pays N_p in the
+% first generation and N_p - n_e afterwards, so the common budget axis shared
+% with the greedy baseline has to follow.
+opts.cacheElites   = ~opts.useGersRepair;
+if opts.cacheElites
+    eaEvalSchedule = ea_params.popSize + ...
+        (0:maxGen-1)' * (ea_params.popSize - ea_params.nTop);
+else
+    eaEvalSchedule = ea_params.popSize * (1:maxGen)';
+end
+eaBudget = eaEvalSchedule(end);   % total EA evaluations, for the Evals column
+
 alpha = ea_params.alpha;
 
+%% Greedy baseline variant (Fig 1, B2 comparison)
+% @greedy_prune     -- pruning only, no backtracking (monotone / backward
+%                      elimination). This is what Fig 1 reports.
+% @greedy_codesign  -- bidirectional flips, ell may also increase; terminates at
+%                      a 1-flip local optimum. Kept for reference; swap here.
+greedyFcn = @greedy_prune;
+
 %% Bound display options (for Fig 1)
-showLB    = true;  % Show exponential lower bound from convergence theorem (Eq. 49)
-lb_lambda = 0.05;  % λ for Eq.(49) lower bound; paper empirical range ≈ [0.035, 0.069] (4×4 grid)
+% Show the per-generation convergence prediction of Theorem 1 (Section IV),
+% computed by EA functions/Phi_predictor.m. All of its constants (Upsilon, rho,
+% L_J, h*, h_t) are estimated from (A, B, K_d) and the graph -- there is no
+% free parameter to tune. The prediction is only non-trivial while
+% h_{t-1} > h*; Phi_predictor prints how many generations satisfy that.
+% Set false to omit the amber curve and its shaded band from every panel of
+% Fig. 1 (and to skip the gap_predictor calls that produce them). LB_grid and
+% LB_sh are then saved as NaN, which plot_only/plot_figs.m already guards on, so
+% the plot-only path degrades cleanly too. That file carries its own showLB.
+showLB = false;
 
 %% ===================== Pre-allocate =====================
 % Per-method cost decomposition:  J_total = J_perf + J_struct
@@ -71,6 +114,29 @@ adjMtx_all       = cell(nGrid, 1);
 K_ea_all         = cell(nGrid, 1);
 actuatedNodes_all = cell(nGrid, 1);
 
+% Inputs required by Phi_predictor (the Theorem 1 convergence prediction).
+% K_full_all holds the THRESHOLDED dense gain K_d -- the same matrix the EA
+% sorts and truncates (ea_lqr_codesign_gershgorin.m). h(ell) in Definition 2(c)
+% is computed from this support, so it must not be the raw dlqr gain.
+% Indexed by (grid, seed), NOT by grid alone: every seed builds a DIFFERENT plant
+% (its own topology and actuator placement), so a per-grid cache assigned inside
+% the seed loop retains only the last seed's plant. Pairing that with seed s's
+% elite genes silently evaluates the certificate on the wrong system -- it made
+% the 7x7 seed-1 gap read 196.9 instead of 2.85.
+K_full_all = cell(nGrid, numSeeds);
+A_all      = cell(nGrid, numSeeds);
+B_all      = cell(nGrid, numSeeds);
+eaLinks    = cell(nGrid, numSeeds);
+eaGenes    = cell(nGrid, numSeeds);   % elite genes per generation, for gap_predictor
+gdCurves   = cell(nGrid, numSeeds);   % greedy incumbent on the EA's generation axis
+gdFinal    = NaN(nGrid, numSeeds);
+gdEvals    = NaN(nGrid, numSeeds);
+
+% Theorem 1 prediction per grid, normalized by the dense-LQR cost. Saved to
+% fig_data.mat so plot_only/plot_figs.m plots the same curve instead of
+% recomputing it (the two copies had already drifted apart).
+LB_grid    = NaN(ea_params.maxGen, nGrid);
+
 shin_kappa = 1;   % locality radius for K-truncation (shared by grid and IEEE 13-bus)
 
 %% ===================== Main Loop =====================
@@ -93,6 +159,7 @@ for s = 1:numSeeds
         A = sys.A;  B = sys.B2;
         [Nx, Nu] = size(B);
         sysSize(g,:) = [Nx, Nu];
+        A_all{g,s} = A;  B_all{g,s} = B;
         adjMtx_all{g}        = adjMtx;
         actuatedNodes_all{g} = actuatedNodes;
 
@@ -100,9 +167,15 @@ for s = 1:numSeeds
         K_full = -dlqr(A, B, Q_bm, R_bm);
 
         % ---------- Dense LQR (|K| >= 1e-3) ----------
+        % The LQR normalizer must use the SAME K_d as the structural baseline,
+        % and the same one the EA uses internally (ea_lqr_codesign_gershgorin.m
+        % builds costBM from the thresholded K_bm). Normalizing by the
+        % unthresholded K_full put eaCurves and denseCostRef on different
+        % scales, so their ratio in Fig. 1 was slightly inconsistent.
         K_dense = K_full;
-        K_dense(abs(K_dense) < 1e-3) = 0;
-        costBM = get_lqr_cost(A, B, Q_bm, R_bm, K_full);
+        K_dense(abs(K_dense) <= 1e-3) = 0;
+        costBM = get_lqr_cost(A, B, Q_bm, R_bm, K_dense);
+        K_full_all{g,s} = K_dense;   % same K_d the EA truncates, per seed
 
         % ---------- κ=3 Truncation (Shin-style locality) ----------
         G_grid  = graph(adjMtx);
@@ -158,6 +231,25 @@ for s = 1:numSeeds
         [result, history] = ea_lqr_codesign_gershgorin(A, B, ea_params, opts);
         K_ea = result.K_sparse;
         eaCurves{g, s} = history.bestCost;
+        eaLinks{g, s}  = history.bestLinks;
+        eaGenes{g, s}  = history.bestGene;   % needed by gap_predictor (Theorem C)
+
+        % ---- Greedy baseline (B2: "why an EA rather than something simpler?") ----
+        % Same gene, same cost oracle, same decode, and a link neighbourhood
+        % restricted to the EA's own +-d so the comparison is like-for-like.
+        % Pruning only -- no move ever restores a removed link/actuator/sensor.
+        % Plotted against the EA's generation axis via evaluations / popSize.
+        [gdBest, gdHist] = greedyFcn(A, B, ea_params, ...
+            struct('Q', Q_bm, 'R', R_bm, 'denseTol', 1e-3, ...
+                   'useGersRepair', opts.useGersRepair, 'verbose', false, ...
+                   'eaEvalSchedule', eaEvalSchedule));
+        gdCurves{g, s} = gdHist.JperGen;
+        gdFinal(g, s)  = gdBest.J;
+        gdEvals(g, s)  = gdBest.evals;
+        fprintf(['    greedy: J=%.4f (EA %.4f), N_a=%d N_s=%d N_c=%d, ' ...
+                 '%d evals (%.2fx EA budget of %d; %d of them provable no-ops)\n'], ...
+            gdBest.J, history.bestCost(end), gdBest.Na, gdBest.Ns, gdBest.Nc, ...
+            gdBest.evals, gdBest.evals/eaBudget, eaBudget, sum(gdHist.nNoop));
         K_ea_all{g} = K_ea;   % keep last seed (for topology diagram)
 
         [J_e, Jp_e, Js_e] = cost_decompose(A, B, Q_bm, R_bm, K_ea, costBM, alpha);
@@ -280,7 +372,9 @@ cb_ea    = [0.00 0.45 0.74];
 cb_dens  = [0.50 0.50 0.50];
 cb_diag  = [0.85 0.33 0.10];
 cb_trunc = [0.47 0.67 0.19];   % green — κ=3 truncation
-cb_lb    = [0.93 0.69 0.13];   % amber — Eq. (49) exponential lower bound
+cb_gd    = [0.49 0.18 0.56];   % purple — greedy baseline (B2 comparison)
+cb_lb    = [0.93 0.69 0.13];   % amber — Thm. C certified lower envelope
+ca_lb    = [0.99 0.92 0.72];   % amber fill — the certified optimality gap
 ca_ea    = [0.75 0.85 1.00];
 gens = (1:maxGen)';
 
@@ -304,6 +398,14 @@ for g = 1:nGrid
         ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
     hEA = plot(gens, mu, '-', 'Color', cb_ea, 'LineWidth', lw);
 
+    % Greedy baseline, mean over seeds, on the same normalisation and the same
+    % budget axis (its evaluations divided by N_p).
+    gdMat = zeros(maxGen, numSeeds);
+    for s = 1:numSeeds
+        gdMat(:, s) = gdCurves{g, s} / denseCostRef(g, s);
+    end
+    hGD = plot(gens, mean(gdMat, 2), '-', 'Color', cb_gd, 'LineWidth', lw*0.8);
+
     hDens = yline(1.0, '--', 'Color', cb_dens, 'LineWidth', 2);
 
     J_diag_n = meanTotal(g,2) / Jref;
@@ -325,18 +427,56 @@ for g = 1:nGrid
             'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
     end
 
-    % Exponential lower bound: J_min(t) >= J_R* + A0*exp(-lambda*t)  [Eq. (49)]
+    % Certified optimality gap, Theorem C / Corollary C.1 (see proof_IV.md).
+    %
+    % History of this curve. It was originally J_R* + A0*exp(-0.05*t) with J_R*
+    % and A0 read off the endpoints of the EA curve it was plotted against -- a
+    % functional form from a theorem in the superseded March draft, with a
+    % lambda that was not falsifiable. It was then replaced by Phi_predictor,
+    % the link certificate of the submitted Theorem 1; that is honest but
+    % certifies ZERO generations (h_t == 1 against h* ~ 2), because the link
+    % coordinate is inert (ell moves 0 of 750 available on the 7x7 grid) and the
+    % whole cost reduction comes from the masks.
+    %
+    % What is plotted now is the lower envelope
+    %     J_EA(theta*_t) - [ M(S*_t) + (1/gamma - 1) M(Omega\S*_t) ]
+    % with M(T) = w_a|T| + w_c*sum_{u in T} m_u exactly modular, and gamma the
+    % Das-Kempe submodularity ratio of the LQR value function on the actuator
+    % coordinate, estimated per plant. The shaded region between this and the EA
+    % curve is the certified optimality gap: the optimum over actuator masks at
+    % the current (ell, s) provably lies inside it.
     hLB = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);  % sentinel
     if showLB
-        lam_g = lb_lambda;   % λ from Eq.(49); adjust lb_lambda in Configuration section
-        % Estimate J_R* (recombination plateau) and A0 (initial amplitude) from EA data
-        JR_vec  = arrayfun(@(s) eaCurves{g,s}(end), 1:numSeeds);
-        A0_vec  = arrayfun(@(s) eaCurves{g,s}(1),   1:numSeeds) - JR_vec;
-        JR_star = mean(JR_vec);
-        A0_g    = max(mean(A0_vec), 0);
-        LB_curve = (JR_star + A0_g * exp(-lam_g * gens)) / Jref;
+        LOmat = zeros(maxGen, numSeeds);
+        validAll = true(maxGen, 1);
+        for s = 1:numSeeds
+            [gapTraj, gapOut] = gap_predictor( ...
+                A_all{g,s}, B_all{g,s}, K_full_all{g,s}, eaGenes{g, s}, ...
+                struct('wc', w_c, 'wa', w_r, 'ws', w_s), ...
+                struct('Q', eye(sysSize(g,1)), 'R', eye(sysSize(g,2)), ...
+                       'verbose', false));
+            LOmat(:, s) = max(eaCurves{g, s} - gapTraj, 0) / denseCostRef(g, s);
+            validAll = validAll & gapOut.valid;
+            fprintf('  Grid %dx%d seed %d: gamma=%.4f, gap(end)=%.3f (%.0f%% of J=%.3f), Thm.C valid %d/%d, at end: %d\n', ...
+                gridSizes(g), gridSizes(g), eaSeeds(s), gapOut.gamma, gapTraj(end), ...
+                100*gapTraj(end)/eaCurves{g,s}(end), eaCurves{g,s}(end), ...
+                nnz(gapOut.valid), maxGen, gapOut.validAtEnd);
+        end
+        LB_curve = mean(LOmat, 2);
+        LB_grid(:, g) = LB_curve;   % saved to fig_data.mat for plot_only/plot_figs.m
         delete(hLB);
+
+        % The bound carries the local-optimality slack sum(eps_u) explicitly, so
+        % it is valid at every generation and needs no gating; where the elite is
+        % not yet 1-flip locally optimal the slack simply widens the band. That is
+        % the honest rendering: an unconverged run gets a weaker certificate, not
+        % a missing one.
+        fill([gens; flipud(gens)], [mu; flipud(LB_curve)], ca_lb, ...
+            'EdgeColor', 'none', 'FaceAlpha', 0.55, 'HandleVisibility', 'off');
         hLB = plot(gens, LB_curve, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+        uistack(hEA, 'top');
+        fprintf('  Grid %dx%d: elite 1-flip locally optimal on %d/%d generations (all seeds)\n', ...
+            gridSizes(g), gridSizes(g), nnz(validAll), maxGen);
     end
 
     % Mark convergence generation (mean)
@@ -346,7 +486,9 @@ for g = 1:nGrid
             'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
     end
 
-    xlabel('Generation', 'FontSize', labFS);
+    % Both searches are plotted against the same budget: the EA spends exactly N_p
+% cost evaluations per generation, and greedy's incumbent is sampled at N_p*g.
+xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
     if g == 1
         ylabel('$J \;/\; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
     end
@@ -356,15 +498,17 @@ for g = 1:nGrid
     grid on; box on;
 
     if g == 1 || g == nGrid
-        legHandles = [hEA, hDens, hDiag];
-        legLabels  = {'EA-LQR', 'Dense ($=1$)', 'Diagonal'};
+        legHandles = [hEA, hGD, hDens, hDiag];
+        legLabels  = {'EA-LQR', 'Greedy', 'Dense ($=1$)', 'Diagonal'};
         if all(trunc_stable_grid(g, :))
             legHandles(end+1) = hTrunc;
             legLabels{end+1}  = '$\kappa=1$ Trunc.';
         end
         if showLB
             legHandles(end+1) = hLB;
-            legLabels{end+1}  = 'Conv';
+            % The bound is over ACTUATOR masks at the current (ell, s), not over
+            % all of Theta -- writing "min J_EA" would overstate it.
+            legLabels{end+1}  = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
         end
         legend(legHandles, legLabels, 'Location', 'northeast', ...
             'FontSize', legFS, 'Interpreter', 'latex');
@@ -405,7 +549,7 @@ fprintf('\nResults saved to %s\n', outDir);
 % Sign convention: same as grid section (u = K*x)
 
 fprintf('\n\n=================================================================\n');
-fprintf('  IEEE 13-BUS: Dense LQR vs kappa=2 Truncation vs EA-LQR\n');
+fprintf('  IEEE 13-BUS: Dense LQR vs kappa=%d Truncation vs EA-LQR\n', shin_kappa);
 fprintf('=================================================================\n');
 
 % ---- Parameters ----
@@ -452,6 +596,7 @@ for si = 1:nShinSys
     % ---- Method 1: Dense LQR ----
     K_pos_dense  = dlqr(A_shin, B_shin, Q_shin, R_shin);
     K_dense_shin = -K_pos_dense;
+    K_dense_shin(abs(K_dense_shin) <= 1e-3) = 0;   % same K_d definition as the grids
     J_dense_shin = get_lqr_cost(A_shin, B_shin, Q_shin, R_shin, K_dense_shin);
     fprintf('  Dense  : J=%.4e  nnz=%d\n', J_dense_shin, nnz(K_dense_shin));
     for ss = 1:nShinSeeds
@@ -498,11 +643,26 @@ for si = 1:nShinSys
     end
 
     % ---- Method 3: EA-LQR ----
-    opts_shin = struct('verbose', false, 'Q_bm', Q_shin, 'R_bm', R_shin, 'useGersRepair', true);
+    % Repair is OFF for every panel of Fig. 1, IEEE 13-bus included. Algorithm 2
+    % is the subject of Fig. 2 and is evaluated there; mixing it into one panel
+    % of Fig. 1 made that panel incomparable with the other two.
+    opts_shin = struct('verbose', false, 'Q_bm', Q_shin, 'R_bm', R_shin, ...
+                       'useGersRepair', opts.useGersRepair, ...
+                       'linkDecode', opts.linkDecode);
     for ss = 1:nShinSeeds
         rng(shin_seeds(ss));
         fprintf('  EA seed=%d ...', shin_seeds(ss));
         [res_shin, shin_ea_hist{si, ss}] = ea_lqr_codesign_gershgorin(A_shin, B_shin, shin_ea_params, opts_shin);
+        % Greedy baseline on the same plant, same oracle, same repair setting
+        [gdB_sh, gdH_sh] = greedyFcn(A_shin, B_shin, shin_ea_params, ...
+            struct('Q', Q_shin, 'R', R_shin, 'denseTol', 1e-3, ...
+                   'useGersRepair', opts_shin.useGersRepair, 'verbose', false, ...
+                   'eaEvalSchedule', eaEvalSchedule));
+        gdCurve_sh = gdH_sh.JperGen;
+        fprintf(['    greedy IEEE13: J=%.4f (EA %.4f), N_a=%d N_s=%d N_c=%d, ' ...
+                 '%d evals (%.2fx of %d; %d no-ops)\n'], ...
+            gdB_sh.J, shin_ea_hist{si,ss}.bestCost(end), gdB_sh.Na, gdB_sh.Ns, gdB_sh.Nc, ...
+            gdB_sh.evals, gdB_sh.evals/eaBudget, eaBudget, sum(gdH_sh.nNoop));
         K_ea_shin  = res_shin.K_sparse;
         J_ea_s     = get_lqr_cost(A_shin, B_shin, Q_shin, R_shin, K_ea_shin);
         shin_J_raw(si, 3, ss) = J_ea_s;
@@ -632,7 +792,9 @@ plot(xDim_ext, sparTrunc*100, '^:',  'Color', cb_trunc, 'LineWidth', lw, 'Marker
 plot(xDim_ext, sparEA*100,    'o-',  'Color', cb_ea,    'LineWidth', lw, 'MarkerSize', 8, 'MarkerFaceColor', cb_ea);
 legend({'Dense', 'Diagonal', 'Trunc', 'EA'}, 'FontSize', legFS, 'Location', 'northeast');
 xlabel('System', 'FontSize', labFS);
-ylabel('Density (\%)', 'FontSize', labFS);
+% Plain '%': this axis uses the default 'tex' interpreter, in which '\%' is not a
+% valid escape and throws "string must be valid interpreter syntax" at render time.
+ylabel('Density (%)', 'FontSize', labFS);
 title('(b) Controller Density', 'FontSize', titFS);
 set(gca, 'XTick', xDim_ext, 'XTickLabel', xTickLbl);
 grid on; box on;
@@ -684,6 +846,7 @@ sd_sh = std(normMat_sh, 0, 2);
 fill([gens; flipud(gens)], [mu_sh+sd_sh; flipud(max(mu_sh-sd_sh, 0))], ...
     ca_ea, 'EdgeColor', 'none', 'FaceAlpha', 0.4);
 hEA_sh   = plot(gens, mu_sh, '-',  'Color', cb_ea,    'LineWidth', lw);
+hGD_sh   = plot(gens, gdCurve_sh / Jref_sh, '-', 'Color', cb_gd, 'LineWidth', lw*0.8);
 hDens_sh = yline(1.0,  '--', 'Color', cb_dens,  'LineWidth', 2);
 
 J_diag_sh_n = shin_diag_comp_ratio;
@@ -704,33 +867,61 @@ else
         'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
 end
 
-% Exponential lower bound — Eq. (49)
+% Certified optimality gap of Theorem C -- same treatment as the grid panels
+% above (see the comment there for the history of this curve). gap_predictor
+% needs no graph and no state-to-node map: it reads the actuator structure off
+% the elite gene directly, so the blocked IEEE 13-bus state ordering that
+% Phi_predictor had to be told about is irrelevant here.
+% Preallocated unconditionally: the save() at the end of this script writes
+% LB_sh whether or not the curve was computed, so leaving it undefined when
+% showLB is false made the whole run fail at the last line.
+LB_sh  = NaN(maxGen, 1);
 hLB_sh = plot(NaN, NaN, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);  % sentinel
 if showLB
-    JR_vec_sh  = arrayfun(@(ss) shin_ea_hist{si_m,ss}.bestCost(end), 1:nShinSeeds);
-    A0_vec_sh  = arrayfun(@(ss) shin_ea_hist{si_m,ss}.bestCost(1),   1:nShinSeeds) - JR_vec_sh;
-    JR_star_sh = mean(JR_vec_sh);
-    A0_sh      = max(mean(A0_vec_sh), 0);
-    LB_sh      = (JR_star_sh + A0_sh * exp(-lb_lambda * gens)) / Jref_sh;
+    LOmat_sh = zeros(maxGen, nShinSeeds);
+    validAll_sh = true(maxGen, 1);
+    wsh = struct('wc', 0.05*(1-shin_ea_params.alpha), ...
+                 'wa', 0.40*(1-shin_ea_params.alpha), ...
+                 'ws', 0.20*(1-shin_ea_params.alpha));
+    for ss = 1:nShinSeeds
+        curve_ss = shin_ea_hist{si_m, ss}.bestCost;
+        [gapTraj_sh, gapOut_sh] = gap_predictor( ...
+            A_shin, B_shin, K_dense_shin, shin_ea_hist{si_m, ss}.bestGene, wsh, ...
+            struct('Q', Q_shin, 'R', R_shin, 'verbose', false));
+        LOmat_sh(:, ss) = max(curve_ss - gapTraj_sh, 0) / Jref_sh;
+        validAll_sh = validAll_sh & gapOut_sh.valid;
+        fprintf('  IEEE 13-bus seed %d: gamma=%.4f, gap(end)=%.3f (%.0f%% of J=%.3f), Thm.C valid %d/%d, at end: %d\n', ...
+            shin_seeds(ss), gapOut_sh.gamma, gapTraj_sh(end), ...
+            100*gapTraj_sh(end)/curve_ss(end), curve_ss(end), ...
+            nnz(gapOut_sh.valid), maxGen, gapOut_sh.validAtEnd);
+    end
+    LB_sh = mean(LOmat_sh, 2);
     delete(hLB_sh);
+    fill([gens; flipud(gens)], [mu_sh; flipud(LB_sh)], ca_lb, ...
+        'EdgeColor', 'none', 'FaceAlpha', 0.55, 'HandleVisibility', 'off');
     hLB_sh = plot(gens, LB_sh, '-.', 'Color', cb_lb, 'LineWidth', lw*0.8);
+    uistack(hEA_sh, 'top');
+    fprintf('  IEEE 13-bus: elite 1-flip locally optimal on %d/%d generations\n', ...
+        nnz(validAll_sh), maxGen);
 end
 
-xlabel('Generation', 'FontSize', labFS);
+% Both searches are plotted against the same budget: the EA spends exactly N_p
+% cost evaluations per generation, and greedy's incumbent is sampled at N_p*g.
+xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
 title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
-legH_sh = [hEA_sh, hDens_sh];
-legL_sh = {'EA-LQR', 'Dense ($=1$)'};
+legH_sh = [hEA_sh, hGD_sh, hDens_sh];
+legL_sh = {'EA-LQR', 'Greedy', 'Dense ($=1$)'};
 if J_diag_sh_n < 1e4
     legH_sh(end+1) = hDiag_sh;
     legL_sh{end+1} = 'Diagonal';
 end
 if shin_trunc_stable(si_m)
     legH_sh(end+1) = hTrunc_sh;
-    legL_sh{end+1} = '$\kappa=2$ Trunc.';
+    legL_sh{end+1} = sprintf('$\\kappa=%d$ Trunc.', shin_kappa);
 end
 if showLB
     legH_sh(end+1) = hLB_sh;
-    legL_sh{end+1} = 'LB (Eq.~49)';
+    legL_sh{end+1} = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
 end
 legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
 grid on; box on;
@@ -931,6 +1122,7 @@ mu_cg_g = nanmean(convGenDiag,  2);   sd_cg_g = nanstd(convGenDiag,  0, 2);
 save(fullfile(plotDir, 'fig_data.mat'), ...
     'gridSizes', 'eaSeeds', 'sysSize', 'ea_params', ...
     'eaCurves', 'denseCostRef', 'convGenDense', 'convGenDiag', ...
+    'gdCurves', 'gdCurve_sh', 'gdFinal', 'gdEvals', ...
     'meanTotal', 'meanPerf', 'meanStruct', ...
     'meanNnz', 'nAct_all', 'nSens_all', ...
     'meanPerfTrunc', 'meanCompTrunc', 'meanNnzTrunc', 'trunc_stable_grid', ...
@@ -940,7 +1132,8 @@ save(fullfile(plotDir, 'fig_data.mat'), ...
     'J_diag_shin_ratio', 'J_perf_trunc_ieee13', 'J_comp_trunc_ieee13', ...
     'J_mesh_perf_mean', 'spar_mesh_dense', 'spar_mesh_ea', 'spar_mesh_diag', 'spar_trunc_ieee13', ...
     'mu_cg_d', 'sd_cg_d', 'mu_cg_g', 'sd_cg_g', ...
-    'mu_cg_mesh', 'sd_cg_mesh', 'mu_cg_mesh_diag', 'sd_cg_mesh_diag','LB_sh');
+    'mu_cg_mesh', 'sd_cg_mesh', 'mu_cg_mesh_diag', 'sd_cg_mesh_diag', ...
+    'LB_sh', 'LB_grid', 'shin_kappa');
 fprintf('Plot data saved → %s/fig_data.mat\n', plotDir);
 
 

@@ -69,9 +69,9 @@ J_total =  J_perf_norm + ...
            w_col  * active_cols;
 
 % ----------- Step 5: Gershgorin stability margin penalty -----------
-if gers_weight > 0
-    L_gers  = gersgorin_penalty(A, B, K_sparse);
-    J_total = J_total + gers_weight * L_gers;
-end
+% if gers_weight > 0
+%     L_gers  = gersgorin_penalty(A, B, K_sparse);
+%     J_total = J_total + gers_weight * L_gers;
+% end
 
 end

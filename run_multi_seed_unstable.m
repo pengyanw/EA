@@ -15,7 +15,7 @@ Ts             = 0.2;
 actDensity     = 1;
 topoSeed       = 10;
 
-eaSeeds  = [1 10 15 20 25 30 35 40 45 50];
+eaSeeds  = [1 10 15];
 numSeeds = length(eaSeeds);
 
 ea_params.popSize  = 20;
@@ -30,6 +30,37 @@ opts_base.max_R_val  = 10;
 opts_base.min_Q_val  = 1e-4;
 opts_base.min_R_val  = 1e-4;
 opts_base.verbose    = false;
+
+% --- Which variant of Algorithm 1 to run (set explicitly, do not inherit) ---
+% Section III of the paper: every individual starts at ell_0 = ||K_d||_0, so the
+% cost curve begins at the dense controller (normalized ~1) and prunes downward.
+% Set initLinks='random' to recover the earlier behaviour, in which ell_0 was
+% drawn uniformly and the curve started from an arbitrary sparsity instead.
+% Keep this consistent with analysis_perf_bounds.m (Figure 1).
+opts_base.initLinks        = 'paper';    % 'random' => ell_0 ~ U{1, ||K_d||_0}
+opts_base.gateLinkMutation = false;      % true     => delta gated on p_m
+
+% Canonicalise the gene's link count after each decode (see analysis_perf_bounds.m
+% and ea_lqr_codesign_gershgorin.m). NOTE the interaction with repair: when the
+% Gershgorin branch succeeds it overwrites ell with nnz(K_sparse) anyway, so on
+% repaired individuals that write-back wins over the canonicalisation. The two
+% rules disagree -- nnz counts surviving entries, the canonical ell is the
+% deepest surviving rank -- and only the latter leaves K unchanged.
+opts_base.linkDecode       = 'canonical';
+
+% Draw the greedy baseline (Algorithm 3, EA functions/greedy_prune.m) in panel
+% (a), one curve per repair condition. Set false to omit both curves and skip
+% the runs that produce them. Greedy is deterministic, so one run per condition
+% suffices and there is no shaded band. This is the figure the "repair separates
+% the two searches" claim rests on: repair improves the EA and degrades greedy,
+% which is not visible from the EA curves alone.
+showGreedy = true;
+
+% Repair step size: Inf is the pure Polyak step of Eq. (37), which is what
+% Proposition 5 proves. It is NOT equivalent to the previous clamped step at
+% full scale -- measured over 15,415 repair calls it lowers the repair failure
+% rate from 42.0% to 38.1% (final cost 21.49 -> 21.38, within one sigma).
+opts_base.gersEtaCap = Inf;
 
 convergeTol = 0.05;
 maxGen = ea_params.maxGen;
@@ -49,7 +80,7 @@ B = sys.B2;
 
 % --- Amplify spectral radius to make A open-loop unstable ---
 rho_orig = max(abs(eig(A_orig)));
-rho_target = 1.1;                       % desired spectral radius > 1
+rho_target = 1.3;                       % desired spectral radius > 1
 scale = rho_target / rho_orig;
 A = A_orig * scale;
 
@@ -69,12 +100,28 @@ finalCostAll = zeros(numSeeds, nCond);
 convGenAll   = zeros(numSeeds, nCond);
 convRateAll  = zeros(numSeeds, nCond);
 elapsedAll   = zeros(numSeeds, nCond);
+phaseTot     = zeros(5, nCond);   % rows: repair exit phase -1, 0, 1, 2, 3
 
 %% ===================== Run Experiments =====================
+gdCurveCond = NaN(maxGen, nCond);   % greedy incumbent on the EA generation axis
+gdFinalCond = NaN(1, nCond);
+
 for c = 1:nCond
     opts = opts_base;
     opts.useGersRepair = (c == 2);
     fprintf('========== Condition %d: %s ==========\n', c, condNames{c});
+
+    if showGreedy
+        % Same gene, same decode, same cost oracle, same repair setting.
+        [gdB, gdH] = greedy_prune(A, B, ea_params, ...
+            struct('Q', eye(Nx), 'R', eye(Nu), 'denseTol', 1e-3, ...
+                   'useGersRepair', opts.useGersRepair));
+        gdCurveCond(:, c) = gdH.JperGen;
+        gdFinalCond(c)    = gdB.J;
+        fprintf('  greedy: J=%.4f  N_a=%d N_c=%d  %d evals (%.2fx EA budget), %d infeasible\n', ...
+            gdB.J, gdB.Na, gdB.Nc, gdB.evals, ...
+            gdB.evals/(ea_params.popSize*maxGen), gdB.nInf);
+    end
 
     for s = 1:numSeeds
         seed = eaSeeds(s);
@@ -89,6 +136,11 @@ for c = 1:nCond
         unstableAll(:, s, c) = history.unstableCount;
         if isfield(history, 'repairCount')
             repairAll(:, s, c) = history.repairCount;
+        end
+        % Exit-phase mix of Algorithm 2, reported in Section VII:
+        % rows are phase -1 (failed) / 0 / 1 / 2 / 3.
+        if isfield(history, 'repairPhase')
+            phaseTot(:, c) = phaseTot(:, c) + sum(history.repairPhase, 2);
         end
         finalCostAll(s, c) = result.cost;
 
@@ -132,6 +184,24 @@ printRow('Avg unstable (last 20)', ...
 printRow('Runtime (s)', elapsedAll(:,1), elapsedAll(:,2));
 fprintf('%s\n', repmat('=', 1, 64));
 
+%% ===================== Repair exit-phase mix (for Section VII) =====================
+tot = sum(phaseTot(:,2));
+if tot > 0
+    lbl = {'failed', 'phase 0 (already stable)', ...
+           'phase 1 (subgradient, in K_S)', ...
+           'phase 2 (line search, in K_S)', ...
+           'phase 3 (support re-selection)'};
+    fprintf('\nAlgorithm 2 exit phases over %d repair calls:\n', tot);
+    for k = 1:5
+        fprintf('  %-32s %7d  (%5.2f%%)\n', lbl{k}, phaseTot(k,2), 100*phaseTot(k,2)/tot);
+    end
+    ok = tot - phaseTot(1,2);
+    if ok > 0
+        fprintf('  of the %d SUCCESSFUL repairs: phase 1 %.1f%%, phase 2 %.1f%%, phase 3 %.1f%%\n', ...
+            ok, 100*phaseTot(3,2)/ok, 100*phaseTot(4,2)/ok, 100*phaseTot(5,2)/ok);
+    end
+end
+
 %% ===================== Dense LQR Reference (for normalisation) =====================
 Q_bm_ref = eye(Nx);  R_bm_ref = eye(Nu);
 K_dense_ref = -dlqr(A, B, Q_bm_ref, R_bm_ref);
@@ -158,61 +228,68 @@ titFS = 15;   % subplot titles
 legFS = 11;   % legend
 lw    = 2.5;  % line width
 
-fig = figure('Position', [60 60 1400 420], 'Color', 'w');
+% Two panels, tiled with compact spacing so the exported PDF has little dead
+% space. Panel (c) (repairs per generation) was removed; repairAll is still
+% saved to the .mat and plot_only/plot_fig2_pdf.m can rebuild any variant.
+fig = figure('Position', [60 60 920 380], 'Color', 'w');
 set(fig, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
+tl = tiledlayout(fig, 1, 2, 'TileSpacing', 'compact', 'Padding', 'tight');
 
 % --- (a) Best Cost (normalised by Dense LQR total cost) ---
-subplot(1, 3, 1); hold on;
+nexttile(tl); hold on;
 for c = 1:nCond
     mu = mean(bestCostAll(:,:,c), 2) / J_dense_ref;
     sd = std(bestCostAll(:,:,c), 0, 2)  / J_dense_ref;
     fill([gens; flipud(gens)], [mu+sd; flipud(mu-sd)], ...
         ca(c,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
 end
-h = gobjects(nCond,1);
+ha = gobjects(nCond,1);  hg = gobjects(nCond,1);
 for c = 1:nCond
-    h(c) = plot(gens, mean(bestCostAll(:,:,c),2) / J_dense_ref, '-', ...
+    ha(c) = plot(gens, mean(bestCostAll(:,:,c),2) / J_dense_ref, '-', ...
         'Color', cb(c,:), 'LineWidth', lw);
 end
-hRef = yline(1.0, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1.8);
+if showGreedy
+    for c = 1:nCond
+        hg(c) = plot(gens, gdCurveCond(:,c) / J_dense_ref, ':', ...
+            'Color', cb(c,:), 'LineWidth', lw*0.9);
+    end
+    legend([ha; hg], [strcat("EA, ", condNames), strcat("Greedy, ", condNames)], ...
+        'FontSize', legFS, 'Location', 'northeast', 'Box', 'off', ...
+        'AutoUpdate', 'off');
+end
+% HandleVisibility off, or the dense reference is auto-appended to the legend
+% above as an unnamed entry.
+yline(1.0, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1.8, 'HandleVisibility', 'off');
 xlabel('Generation', 'FontSize', labFS);
 ylabel('Best Cost $/ \; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
 title('(a) Best Cost Convergence', 'FontSize', titFS);
-legend([h; hRef], [condNames, {'Dense LQR ($=1$)'}], ...
-    'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+% No legend here: panel (b) carries the same two conditions in the same colors.
+% The dashed grey line at 1 is the dense-LQR reference -- state that in the
+% caption, since it no longer has a legend entry.
 grid on; box on;
 
 % --- (b) Unstable Count ---
-subplot(1, 3, 2); hold on;
+nexttile(tl); hold on;
 for c = 1:nCond
     mu = mean(unstableAll(:,:,c), 2);
     sd = std(unstableAll(:,:,c), 0, 2);
-    fill([gens; flipud(gens)], [mu+sd; flipud(mu-sd)], ...
+    fill([gens; flipud(gens)], [mu+sd; flipud(max(mu-sd,0))], ...
         ca(c,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
 end
+hb = gobjects(nCond,1);
 for c = 1:nCond
-    plot(gens, mean(unstableAll(:,:,c),2), '-', 'Color', cb(c,:), 'LineWidth', lw);
+    hb(c) = plot(gens, mean(unstableAll(:,:,c),2), '-', 'Color', cb(c,:), 'LineWidth', lw);
 end
 xlabel('Generation', 'FontSize', labFS);
 ylabel('Unstable Count', 'FontSize', labFS);
 title('(b) Stability Failures', 'FontSize', titFS);
-legend(condNames, 'Location', 'northeast', 'FontSize', legFS);
+% Legend on the line handles; the fill() patches are drawn first and would
+% otherwise be what gets labelled.
+legend(hb, condNames, 'Location', 'northeast', 'FontSize', legFS);
 ylim([0 ea_params.popSize]);
 grid on; box on;
 
-% --- (c) Gershgorin Repairs ---
-subplot(1, 3, 3); hold on;
-mu_r = mean(repairAll(:,:,2), 2);
-sd_r = std(repairAll(:,:,2), 0, 2);
-fill([gens; flipud(gens)], [mu_r+sd_r; flipud(max(mu_r-sd_r,0))], ...
-    ca(2,:), 'EdgeColor', 'none', 'FaceAlpha', 0.45);
-plot(gens, mu_r, '-', 'Color', cb(2,:), 'LineWidth', lw);
-xlabel('Generation', 'FontSize', labFS);
-ylabel('Repairs / Gen', 'FontSize', labFS);
-title('(c) Gershgorin Repairs', 'FontSize', titFS);
-grid on; box on;
-
-sgtitle(sprintf(['EA-LQR: Baseline vs Gershgorin  ' ...
+title(tl, sprintf(['EA-LQR: Baseline vs Gershgorin  ' ...
     '(Grid %d\\times%d, \\rho(A)=%.2f, %d seeds)'], ...
     gridSize, gridSize, rho_A, numSeeds), ...
     'FontSize', 16, 'FontWeight', 'bold');
@@ -224,15 +301,26 @@ save(fullfile('results', ['gers_comparison_' tag '.mat']), ...
     'eaSeeds', 'bestCostAll', 'unstableAll', 'repairAll', ...
     'finalCostAll', 'convGenAll', 'convRateAll', 'elapsedAll', ...
     'ea_params', 'opts_base', 'gridSize', 'rho_A', 'condNames');
-saveas(fig, fullfile('results', ['gers_comparison_' tag '.png']));
-fprintf('\nResults saved to results/\n');
+% Vector PDF for the paper (Figure 2). exportgraphics with ContentType 'vector'
+% keeps the text selectable and the lines resolution-independent;
+% saveas(...,'pdf') would go through the printer path and pad the page.
+% Exporting the tiledlayout rather than the figure crops to the drawn content.
+pdfPath = fullfile('results', ['gers_comparison_' tag '.pdf']);
+exportgraphics(tl, pdfPath, 'ContentType', 'vector', 'BackgroundColor', 'white');
+exportgraphics(tl, fullfile('results', ['gers_comparison_' tag '.png']), ...
+    'Resolution', 200);
+fprintf('\nFigure 2 (vector PDF) saved to %s\n', pdfPath);
+fprintf('Results saved to results/\n');
 fprintf('========== Experiment Complete ==========\n');
 
 %% ---- Save plot-only data ----
 plotDir = fullfile(pwd, 'plot_only');
 if ~exist(plotDir, 'dir'), mkdir(plotDir); end
+% gdCurveCond/gdFinalCond are all-NaN when showGreedy is false; plot_fig2_pdf.m
+% must guard with any(isfinite(...)) rather than exist().
 save(fullfile(plotDir, 'fig_data_unstable.mat'), ...
     'bestCostAll', 'unstableAll', 'repairAll', ...
     'J_dense_ref', 'ea_params', 'maxGen', 'nCond', 'condNames', ...
-    'gridSize', 'rho_A', 'numSeeds', 'eaSeeds');
+    'gridSize', 'rho_A', 'numSeeds', 'eaSeeds', ...
+    'gdCurveCond', 'gdFinalCond', 'showGreedy');
 fprintf('Unstable plot data saved → %s/fig_data_unstable.mat\n', plotDir);

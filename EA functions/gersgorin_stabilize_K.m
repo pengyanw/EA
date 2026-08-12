@@ -49,6 +49,11 @@ if nargin < 5, opts = struct(); end
 maxIter   = get_opt(opts, 'maxIter',   80);
 targetRho = get_opt(opts, 'targetRho', 0.95);
 verbose   = get_opt(opts, 'verbose',   false);
+% Step-size cap on the Polyak step. Inf reproduces Eq. (37) of the paper
+% exactly, which is what Proposition 5 is proved for. Set to 0.5 to restore the
+% previous clamped step (which is the damped Polyak step with
+% lambda_t = min(1, 0.5*||g||_F^2/(Rbar - gamma)) in (0,1]).
+etaCap    = get_opt(opts, 'etaCap',    Inf);
 
 [Nu, Nx] = size(K_sparse);
 mask = (K_sparse ~= 0);
@@ -91,8 +96,9 @@ for iter = 1:maxIter
 
     % Subgradient: dR_{i*}/dK(u,j) = sign(Acl(i*,j)) * B(i*,u)
 
+    % At Acl(i_star,j) == 0 the row-sum is non-differentiable; sign(0) = 0 is a
+    % valid subgradient element since 0 in [-|B(i_star,u)|, |B(i_star,u)|].
     s_row = sign(Acl(i_star, :));    % 1 x Nx
-    s_row_new = exp(abs(Acl(i_star, :))-max(abs(Acl(i_star, :))));
     b_row = B(i_star, :);            % 1 x Nu
     grad  = b_row' * s_row;          % Nu x Nx (outer product)
     grad  = grad .* mask;            % preserve sparsity
@@ -100,11 +106,18 @@ for iter = 1:maxIter
     gn = norm(grad, 'fro');
     if gn < 1e-14, break; end
 
-    % Polyak step size: eta = (f - f*) / ||g||^2
+    % Polyak step size, Eq. (37): eta_t = (Rbar(K) - gamma) / ||g~||_F^2
     eta = (rmax - targetRho) / (gn^2 + 1e-12);
-    eta = min(eta, 0.5);            % safety clamp
+    eta = min(eta, etaCap);         % etaCap = Inf => pure Polyak step (37)
 
     K = K - eta * grad;
+
+    % Proposition 5 assumes G intersect K_S is non-empty. When it is not, the
+    % pure Polyak step has no descent guarantee and the iterate can diverge, so
+    % stop before Inf/NaN reaches the eigenvalue solve below. Only best_K is used
+    % after this loop, and it only ever holds finite iterates, so breaking is
+    % enough -- no need to write K.
+    if ~all(isfinite(K(:))), break; end
 
     % Track best by actual spectral radius (every 10 iters, cheap enough)
     if mod(iter, 10) == 0

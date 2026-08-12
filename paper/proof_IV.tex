@@ -1,0 +1,423 @@
+% proof_IV.tex -- LaTeX form of proof_IV.md.
+% -----------------------------------------------------------------------------
+% Standalone: compile with pdflatex. Nothing here is \input by main.tex; the
+% theorem bodies are written to match main.tex's Section IV verbatim so blocks
+% can be lifted across without re-deriving anything.
+%
+% Tags on each statement:
+%   [PROVED]      complete argument, no unverified hypothesis
+%   [ASSUMPTION]  needed, stated explicitly, measured violation rate given
+%   [MEASURED]    a number from simulation, with the producing script named
+%   [NOT CLAIMED] deliberately withheld, with the reason
+% -----------------------------------------------------------------------------
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\JEA}{J_{\mathrm{EA}}}
+\newcommand{\JLQR}{J_{\mathrm{LQR}}}
+\newcommand{\Kd}{K_{\mathrm{d}}}
+\newcommand{\Ks}{K_{\mathrm{s}}}
+\newcommand{\gf}{\gamma_{\mathrm{f}}}
+\newcommand{\Rset}{\mathcal{R}}
+\newcommand{\Sstar}{S^{\star}}
+\newcommand{\tagged}[1]{\textsc{[#1]}}
+
+\title{Section IV: proof repository\\[2pt]
+\large Actuator co-design --- where the search stops and how far that is from optimal}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2.5em}
+
+\section{Setup}
+
+Hold the link count $\ell$ and the sensor mask $\mathbf{s}$ fixed. Write
+$\Rset := \{1,\dots,N_u\}$ for the actuator index set and, for a retained set
+$S \subseteq \Rset$, let $K(S)$ denote $\Pi_\ell(\Kd)$ with rows outside $S$ and
+columns outside $\mathbf{s}$ zeroed, so $K(\Rset) = \Ks([\ell,\mathbf{1},\mathbf{s}])$.
+
+\begin{align}
+  f(S) &:= -\,\JLQR(K(S))\,/\,\JLQR(\Kd)
+    \quad\in\ [-\infty,\,0),
+    \label{eq:f}\\[2pt]
+  m_u &:= \bigl|\operatorname{supp}\bigl([\Pi_\ell(\Kd)]_{u,:}\bigr) \cap \mathbf{s}\bigr|,
+    \label{eq:mu}\\[2pt]
+  M(S) &:= \sum_{u \in S}\Bigl( w_a\,\mathbf{1}\{m_u > 0\} + w_c\,m_u \Bigr),
+    \label{eq:M}\\[2pt]
+  U(S) &:= f(S) - M(S).
+    \label{eq:U}
+\end{align}
+
+Larger $f$ is better; $f = -\infty$ exactly on the destabilizing sets. With
+$\ell$ and $\mathbf{s}$ fixed, the sensor and constant terms of $\JEA$ are common
+to all $S$, so minimizing $\JEA$ over the actuator mask is equivalent to
+maximizing $U$.
+
+\begin{lemma}[$M$ is exactly modular]\label{lem:modular} \tagged{proved}
+$M$ is a sum of per-element weights fixed by $(\ell,\mathbf{s})$, hence modular.
+\end{lemma}
+
+\begin{proof}
+Distinct rows of $K(S)$ have disjoint supports, so $N_c(K(S)) = \sum_{u\in S} m_u$
+exactly. An actuator whose row is emptied by the truncation $\Pi_\ell$ carries no
+controller entries and is not charged $w_a$ by $\JEA$, which is what the indicator
+in \eqref{eq:M} records. Each summand therefore depends on $u$ alone.
+\end{proof}
+
+\begin{remark}[why the indicator is not optional]
+Writing $w_a|S|$ in place of $w_a\,\#\{u \in S : m_u > 0\}$ overcharges every
+masked-on actuator whose row the truncation emptied. The two coincide whenever
+$\ell$ is large enough that every masked row survives, which is why the EA never
+exposed the difference ($\ell$ at $90$--$99\%$ of its maximum) and the greedy
+baseline immediately did ($\ell$ at $5$--$12\%$): at one greedy fixed point $16$
+actuators were masked on but only $4$ had entries, inflating $M(\Sstar)$ from
+$2.0$ to $6.8$ and the reported gap from $2.02$ to $6.82$. All of the curvature of
+the problem sits in $f$; by Lemma \ref{lem:modular} the structural terms
+contribute none.
+\end{remark}
+
+\section{Assumptions}
+
+\begin{assumption}[approximate submodularity]\label{as:submod} \tagged{assumption}
+Let $\mathcal{B}$ be the range of architecture sizes the search occupies. For all
+$S$ with $|S| \in \mathcal{B}$ and $A+BK(S)$ Schur stable, and all $T$,
+\begin{equation}\label{eq:submod}
+  \sum_{u \in T}\bigl[f(S \cup u) - f(S)\bigr]
+  \;\geq\; \gf\,\bigl[f(S \cup T) - f(S)\bigr],
+  \qquad \gf > 0 .
+\end{equation}
+\end{assumption}
+
+\begin{assumption}[monotonicity]\label{as:mono} \tagged{assumption}
+On the same sets, $S \subseteq T \Rightarrow f(S) \leq f(T)$.
+\end{assumption}
+
+Neither is automatic: $K(S)$ is a truncation of $\Kd$, not the optimal gain for
+the support $S$.
+
+\paragraph{\tagged{measured} The band in Assumption \ref{as:submod} is not cosmetic.}
+Sampling the Das--Kempe quotient \eqref{eq:submod} stratified by retention
+fraction, $250$ draws per cell, $|T| \geq 2$ (with $|T| = 1$ the quotient is
+identically $1$ and carries no information):
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+$|S|/N_u$ & $0.05$--$0.15$ & $0.15$--$0.30$ & $0.30$--$0.45$ & $0.45$--$0.80$ \\
+\midrule
+$5\times5$ s1  & $1.000$ & $0.980$  & $0.981$  & $0.911$ \\
+$5\times5$ s10 & $1.000$ & $0.999$  & $0.871$  & $0.879$ \\
+$7\times7$ s1  & $0.976$ & $-0.119$ & $-2.012$ & $0.717$ \\
+$7\times7$ s10 & $1.000$ & $0.986$  & $0.652$  & $0.110$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Entries are $\min$ over samples. The searches return $|\Sstar|$ of order $10\%$ of
+$N_u$, i.e.\ the leftmost column, where $f$ is submodular. The negative values sit
+in the middle bands, where the aggregate gain $f(S \cup T) - f(S)$ is near zero and
+the quotient is dominated by its denominator; $18$--$26\%$ of draws there are
+discarded for that reason. Estimating $\gf$ on the band the search occupies gives
+$\gf = 1.0000$ on all three plants of the paper.
+
+\paragraph{\tagged{measured} Assumption \ref{as:mono}.}
+Over $600$ sampled $(S,u)$ pairs with $S$ feasible: $0$ violations on the
+$5\times5$ grid, $2$ on the $7\times7$, of relative size $\leq 0.8\%$, and no
+sampled addition destabilized. Script: \texttt{scratchpad/probe\_A2.m}.
+
+\section{Where the search stops}
+
+\begin{definition}[$1$-flip local optimum]\label{def:loc}
+$\theta^\star$ is a \emph{$1$-flip local optimum} if no single actuator or sensor
+mask flip strictly decreases $\JEA$.
+\end{definition}
+
+\begin{proposition}[elite-child hitting probability]\label{prop:hit} \tagged{proved}
+Let $\mathcal{H}_{t-1}$ be the $\sigma$-algebra generated by the population history
+through generation $t-1$. For every single-bit neighbour $\theta'$ of the elite,
+\begin{equation}\label{eq:qmin}
+  \mathbb{P}\bigl(\theta^{\mathrm{c}} = \theta' \mid \mathcal{H}_{t-1}\bigr)
+  \;\geq\; q_{\min}
+  \;:=\; \frac{(1-p_c)\,p_m(1-p_m)^{N_u+N_x-1}}{N_p\,(2d+1)}
+  \;>\; 0
+\end{equation}
+uniformly in $t$, where $\theta^{\mathrm{c}}$ is some offspring of generation $t$.
+\end{proposition}
+
+\begin{proof}
+With probability $1-p_c$ the algorithm skips crossover and copies the fitter of the
+two selected parents. The elite has the strictly smallest cost, so whenever it is
+selected it is the fitter one; selection assigns it weight at least $1/N_p$.
+Mutation then flips exactly the required bit and no other with probability
+$p_m(1-p_m)^{N_u+N_x-1}$, and leaves $\ell$ unchanged with probability $1/(2d+1)$.
+\end{proof}
+
+\begin{theorem}[almost-sure finite-time convergence]\label{thm:conv} \tagged{proved}
+Suppose $\JEA(\theta^\star_0) < \infty$. Then almost surely there is a finite random
+$T$ with $\JEA(\theta^\star_t) = \JEA(\theta^\star_T)$ for all $t \geq T$, and the
+limiting gene is a $1$-flip local optimum.
+\end{theorem}
+
+\begin{proof}
+$\Theta$ is finite, so $\JEA(\Theta)$ is a finite value set. Elitism carries the
+$n_e$ best genes forward unchanged, so $\JEA(\theta^\star_t)$ is non-increasing; a
+non-increasing sequence in a finite ordered set is eventually constant, at some
+$J_\infty$. For $t > T$, Proposition \ref{prop:hit} gives each prescribed
+single-bit neighbour probability at least $q_{\min} > 0$ per generation, and
+$\sum_{t>T} q_{\min} = \infty$, so by the second Borel--Cantelli lemma every such
+neighbour is produced infinitely often almost surely. If any had cost below
+$J_\infty$, elitism would carry it forward, contradicting the definition of
+$J_\infty$.
+\end{proof}
+
+\begin{proposition}[the returned architecture is irreducible]\label{prop:irr} \tagged{proved}
+At the limiting gene, with $\Sstar$ its retained actuator set,
+\begin{equation}\label{eq:irr}
+\begin{aligned}
+  u \in \Sstar &\;\Longrightarrow\; f(\Sstar) - f(\Sstar \setminus u) \;\geq\; w_a + w_c m_u, \\
+  u \notin \Sstar &\;\Longrightarrow\; f(\Sstar \cup u) - f(\Sstar) \;\leq\; w_a + w_c m_u .
+\end{aligned}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Immediate from Definition \ref{def:loc} applied to $U = f - M$, using Lemma
+\ref{lem:modular} for the marginal of $M$.
+\end{proof}
+
+Each retained actuator pays for itself and each discarded one does not. Both sides
+of \eqref{eq:irr} are computable at a cost of $N_u - |\Sstar|$ Lyapunov solves,
+which makes them usable as a stopping test.
+
+\begin{remark}[what Theorem \ref{thm:conv} does not give]\label{rem:norate} \tagged{not claimed}
+No rate. The chain on $\Theta$ is irreducible, so the classical result for elitist
+EAs with full-support mutation would give almost-sure convergence to the global
+optimum as $t \to \infty$; we do not state it, because it is asymptotic with no
+rate and holds for \emph{any} elitist GA with full-support mutation.
+\end{remark}
+
+\section{Distance to optimality}
+
+The search need not have reached a $1$-flip local optimum when the budget expires,
+so the violation is carried explicitly. For $u \notin \Sstar$,
+\begin{equation}\label{eq:slack}
+  \xi_u := \bigl[\,f(\Sstar \cup u) - f(\Sstar) - w_a - w_c m_u\,\bigr]_+ ,
+  \qquad
+  \Xi(T) := \sum_{u \in T} \xi_u ,
+\end{equation}
+so that
+\begin{equation}\label{eq:slackineq}
+  f(\Sstar \cup u) - f(\Sstar) \;\leq\; w_a + w_c m_u + \xi_u
+\end{equation}
+holds with no hypothesis, and $\xi_u = 0$ exactly when $u$ cannot be added
+profitably.
+
+\begin{theorem}[optimality gap]\label{thm:gap} \tagged{proved under \ref{as:submod}, \ref{as:mono}}
+For any $S$ with $A+BK(S)$ Schur stable,
+\begin{equation}\label{eq:gap}
+  U(S) - U(\Sstar)
+  \;\leq\; M(\Sstar \setminus S)
+  \;+\; \bigl(\gf^{-1} - 1\bigr)\,M(S \setminus \Sstar)
+  \;+\; \gf^{-1}\,\Xi(S \setminus \Sstar).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Assumption \ref{as:submod} with $T = S \setminus \Sstar$, followed by
+\eqref{eq:slackineq}, gives
+\begin{equation*}
+  f(\Sstar \cup S) - f(\Sstar)
+  \;\leq\; \gf^{-1}\!\!\!\sum_{u \in S \setminus \Sstar}\!\!\!
+    \bigl[f(\Sstar \cup u) - f(\Sstar)\bigr]
+  \;\leq\; \gf^{-1}\bigl[M(S \setminus \Sstar) + \Xi(S \setminus \Sstar)\bigr].
+\end{equation*}
+Assumption \ref{as:mono} gives $f(S) \leq f(\Sstar \cup S)$. Subtract $M(S)$, split
+it modularly (Lemma \ref{lem:modular}) as
+$M(S) = M(S \setminus \Sstar) + M(S \cap \Sstar)$, and use
+$f(\Sstar) = U(\Sstar) + M(\Sstar \setminus S) + M(\Sstar \cap S)$.
+\end{proof}
+
+\begin{corollary}[computable bound]\label{cor:gap} \tagged{proved under \ref{as:submod}, \ref{as:mono}}
+Since $\Sstar \setminus S \subseteq \Sstar$ and
+$S \setminus \Sstar \subseteq \Rset \setminus \Sstar$,
+\begin{equation}\label{eq:gapcomp}
+  \min_{\mathbf{a}} \JEA \;\geq\; \JEA(\Sstar) - \mathrm{gap},
+  \qquad
+  \mathrm{gap} := M(\Sstar)
+  + \bigl(\gf^{-1}\!-\!1\bigr) M(\Rset \setminus \Sstar)
+  + \gf^{-1}\,\Xi(\Rset \setminus \Sstar),
+\end{equation}
+the minimum being over actuator masks at the current $(\ell,\mathbf{s})$. Every
+term on the right is available from the run.
+\end{corollary}
+
+\paragraph{\tagged{measured} Both correction terms vanish in practice.}
+With $\gf = 1$ on the operating band, \eqref{eq:gapcomp} collapses to
+\begin{equation}\label{eq:gapsimple}
+  \mathrm{gap} \;=\; M(\Sstar) \;+\; \Xi(\Rset \setminus \Sstar)
+\end{equation}
+--- the structural price of what was kept, plus what was left on the table by not
+converging.
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+plant, seed & $\gf$ & gap & $\JEA(\Sstar)$ & $\min_{\mathbf{a}}\JEA \geq$ & Thm.\ \ref{thm:gap} hypothesis \\
+\midrule
+$5\times5$, 1   & $1.0000$ & $2.100$ & $6.775$  & $4.675$ & $150/150$, end \checkmark \\
+$5\times5$, 10  & $1.0000$ & $1.450$ & $7.811$  & $6.361$ & $63/150$,  end \checkmark \\
+$5\times5$, 15  & $1.0000$ & $0.975$ & $6.547$  & $5.572$ & $24/150$,  end $\times$ \\
+$7\times7$, 1   & $1.0000$ & $2.200$ & $7.646$  & $5.446$ & $144/150$, end \checkmark \\
+$7\times7$, 10  & $1.0000$ & $2.248$ & $10.437$ & $8.189$ & $95/150$,  end $\times$ \\
+$7\times7$, 15  & $1.0000$ & $7.199$ & $11.185$ & $3.986$ & $22/150$,  end $\times$ \\
+IEEE 13-bus     & $1.0000$ & $0.450$ & $2.448$  & $1.998$ & $149/150$, end \checkmark \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Where $\Xi = 0$ the gap \emph{is} $M(\Sstar)$: $18$--$31\%$ of $\JEA$. The outlier,
+$7\times7$ seed $15$ at $64\%$, is slack-dominated ($\Xi \approx 5.2$), and that
+seed is $1$-flip locally optimal in only $22$ of $150$ generations. An unfinished
+run receives a wider band, not a tighter unjustified one.
+
+\begin{remark}[architecture size is set by the weights]\label{rem:size} \tagged{proved}
+Every term of $\JEA$ is non-negative, so
+\begin{equation}\label{eq:Nabound}
+  w_a\,N_a(\Sstar) \;\leq\; \JEA(\Sstar)
+  \qquad\Longrightarrow\qquad
+  N_a(\Sstar) \;\leq\; \JEA(\Sstar)/w_a .
+\end{equation}
+The LQ term is normalized to $1$ at $\Kd$, so the entire LQ budget available to pay
+for actuators is $O(1)$ while each costs $w_a$: the actuator count at the optimum
+is set by the weights, not by the system size. Measured, $\JEA(\Sstar)/w_a$ is
+$13$--$28$ against actual $|\Sstar|$ of $2$--$7$.
+\end{remark}
+
+\begin{remark}[scope]\label{rem:scope}
+Three limits. \emph{(i)} \eqref{eq:gapcomp} bounds the optimum over actuator masks
+at the elite's current $\ell$ and $\mathbf{s}$; relaxing those two coordinates can
+buy more than the entire certified gap, so the band is not a bound on the global
+optimum. Measured, the greedy architecture costs less than the bound on $2$ of $6$
+runs --- no contradiction, since greedy varies $\ell$ and $\mathbf{s}$. The
+restriction is forced: $f$ restricted to sensor sets is $-\infty$ on most subsets
+and admits no submodularity ratio. \emph{(ii)} Theorem \ref{thm:gap} and
+Proposition \ref{prop:irr} are statements about a \emph{point}, not an algorithm;
+they hold for any method returning a $1$-flip local optimum. Only Proposition
+\ref{prop:hit}, the proof of Theorem \ref{thm:conv}, and Remark \ref{rem:pm} are
+specific to the EA. \emph{(iii)} $\gf$ and Assumption \ref{as:mono} are estimated,
+not proved, so the results are rigorous conditional on constants we measure but
+cannot certify.
+\end{remark}
+
+\begin{remark}[mutation-rate scaling]\label{rem:pm} \tagged{proved + measured}
+The factor $(1-p_m)^{N_u+N_x-1}$ in \eqref{eq:qmin} decays exponentially in the
+gene length at fixed $p_m$, but $p_m = c/(N_u+N_x)$ gives
+$(1-p_m)^{N_u+N_x} \to e^{-c}$, so $q_{\min}$ becomes dimension-free. Measured,
+$(1-1/n)^n = 0.3654$ at $n = 75$ and $0.3666$ at $n = 147$, against $0.0213$ and
+$5.31\times10^{-4}$ for fixed $p_m = 0.05$. Ten-seed paired test of $p_m = 1/n$
+against $p_m = 0.05$: $+1.56\%$ on the $5\times5$ grid ($5/10$ wins, $p = 0.183$),
+$+11.36\%$ on the $7\times7$ ($9/10$ wins, $t = 3.37$, $p = 0.0083$). The predicted
+signature is not ``scaled is better'' but ``the advantage grows with $n$'', and
+that is what appears.
+\end{remark}
+
+\section{The greedy baseline}
+
+Greedy round-robin local search over $\{\ell, \mathbf{a}, \mathbf{s}\}$, each phase
+run to a fixed point, with the link phase restricted to the EA's own $\pm d$
+neighbourhood.
+
+\begin{proposition}[the descent path never leaves the stable set]\label{prop:G1} \tagged{proved}
+Starting from $\Kd$, which stabilizes by construction, and accepting only strict
+improvements, every iterate is feasible.
+\end{proposition}
+
+\begin{proof}
+$\JEA = +\infty$ on infeasible points, so any infeasible candidate has cost
+strictly greater than the current finite incumbent and is never accepted.
+\end{proof}
+
+\tagged{measured} Feasible on $6/6$ runs, while $4$--$10$ infeasible candidates are
+probed and rejected ($215$--$251$ on the open-loop unstable plant). The EA has no
+such property: mutation samples infeasible genes unconditionally, and it probes
+$189$--$332$ of them per run. This contradicts the argument that removing a link
+risks ``an infinite jump greedy cannot back out of'': on these plants one never has
+to pass through the infeasible set at all.
+
+\begin{proposition}[Theorem \ref{thm:gap} holds for greedy in its tight form]\label{prop:G3} \tagged{proved}
+Greedy's stopping condition --- no single-bit flip improves $\JEA$ --- is strictly
+stronger than the addition half used in \eqref{eq:slackineq}, so $\xi_u \equiv 0$
+and \eqref{eq:gapcomp} reduces to $M(\Sstar) + (\gf^{-1}-1)M(\Rset\setminus\Sstar)$
+by construction, irrespective of convergence.
+\end{proposition}
+
+\tagged{measured} Evaluated at the greedy fixed point the gap is $23$--$31\%$,
+against $15$--$64\%$ at the EA's, whose spread is driven by $\Xi$.
+
+\begin{proposition}[evaluation count]\label{prop:G2} \tagged{assumption + proved}
+If no masked-off element is ever re-added, each element is removed at most once, so
+the accepted mask moves number at most $N_u + N_x$. The actuator phase costs $N_u$
+evaluations per sweep and either accepts a move or ends the phase, and likewise for
+sensors, so with $C$ cycles
+\begin{equation}\label{eq:evals}
+  \text{evaluations} \;\leq\; N_u(A + C) + N_x(S + C) + (\text{link phase})
+  \;=\; O\bigl((N_u + N_x)^2\bigr).
+\end{equation}
+\end{proposition}
+
+\tagged{measured} Re-additions: $0$ on all seven runs. Sensor removals: $0$ on all
+seven --- the sensor mask is never touched, and the sparsity in $N_s$ is induced by
+the actuator mask and $\ell$. Cycles: exactly $2$ everywhere, which follows from
+the sensor phase accepting nothing and so never perturbing the actuator fixed
+point. Evaluations$/(N_u+N_x)^2$: $0.077$--$0.147$, decreasing in $n$, so
+\eqref{eq:evals} is the right shape but loose --- accepted moves grow much more
+slowly than $n$.
+
+\medskip
+\noindent
+\tagged{not claimed} \emph{Absence of re-additions is empirical, not a consequence
+of Assumption \ref{as:submod}.} Submodularity means diminishing returns, so after
+removing other elements the marginal value of $u$ can only \emph{increase},
+which would make re-adding it more attractive, not less.
+
+\section{What is retired from the submitted Section IV}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Submitted result & Reason for removal \\
+\midrule
+$\Phi(h)$, $h^\star$, Lemma 3 & certifies $0/150$ generations; $h_t \equiv 1 < h^\star$ \\
+Definition 2(c) ($h_t$) & hop distance is a proxy for a magnitude-ordered prune \\
+Lemma 4 & needs $K_{t-1}$ entrywise equal to $\Kd$ on its support \\
+Propositions 1, 2 & consequences of Lemmas 3, 4; crossover is uniform, not single-point \\
+Theorem 1 (drift) & single-path counting is $10^2$--$10^4$ loose; see below \\
+$\mathbf{a} = \mathbf{s} = \mathbf{1}$ & assumes away the coordinate that does the work \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tagged{measured} The drift route cannot be rescued by a better certificate:
+substituting the \emph{exact} LQ increase for the cost bound --- the ceiling for
+any certificate --- still leaves it $17.8\times$ ($5\times5$) and $196\times$
+($7\times7$) below the measured decrease. The residual sits in the probability
+factor $(1-p_m)^{n-c}$, which is forced: for the elite child the flipped-bit set
+must contain no bit outside the certified set, because $\JEA = +\infty$ on
+unstable genes and the harm of an arbitrary flip therefore has no bound.
+
+\end{document}
