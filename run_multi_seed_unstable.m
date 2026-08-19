@@ -54,7 +54,7 @@ opts_base.linkDecode       = 'canonical';
 % suffices and there is no shaded band. This is the figure the "repair separates
 % the two searches" claim rests on: repair improves the EA and degrades greedy,
 % which is not visible from the EA curves alone.
-showGreedy = true;
+showGreedy = false;
 
 % Repair step size: Inf is the pure Polyak step of Eq. (37), which is what
 % Proposition 5 proves. It is NOT equivalent to the previous clamped step at
