@@ -222,18 +222,23 @@ ca = [0.75 0.85 1.0;
       1.00 0.82 0.72];
 
 % Font sizes for double-column LaTeX
-axFS  = 13;   % axis tick labels
-labFS = 14;   % axis labels
-titFS = 15;   % subplot titles
-legFS = 11;   % legend
+axFS  = 17;   % axis tick labels
+labFS = 19;   % axis labels
+titFS = 19;   % subplot titles
+legFS = 15;   % legend
 lw    = 2.5;  % line width
 
 % Two panels, tiled with compact spacing so the exported PDF has little dead
 % space. Panel (c) (repairs per generation) was removed; repairAll is still
 % saved to the .mat and plot_only/plot_fig2_pdf.m can rebuild any variant.
-fig = figure('Position', [60 60 920 380], 'Color', 'w');
-set(fig, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
-tl = tiledlayout(fig, 1, 2, 'TileSpacing', 'compact', 'Padding', 'tight');
+fig = figure('Position', [60 60 1040 400], 'Color', 'w');
+% Times for tick labels, and DefaultTextFontName so that titles, axis labels and
+% legend entries pick it up too -- MATLAB's 'latex' interpreter always renders
+% Computer Modern, so every string below stays on the 'tex' interpreter.
+set(fig, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman', ...
+         'DefaultTextFontName', 'Times New Roman', ...
+         'DefaultLegendFontName', 'Times New Roman');
+tl = tiledlayout(fig, 1, 2, 'TileSpacing', 'tight', 'Padding', 'tight');
 
 % --- (a) Best Cost (normalised by Dense LQR total cost) ---
 nexttile(tl); hold on;
@@ -261,7 +266,7 @@ end
 % above as an unnamed entry.
 yline(1.0, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1.8, 'HandleVisibility', 'off');
 xlabel('Generation', 'FontSize', labFS);
-ylabel('Best Cost $/ \; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
+ylabel('Best cost / {\itJ}_{dense}', 'FontSize', labFS);
 title('(a) Best Cost Convergence', 'FontSize', titFS);
 % No legend here: panel (b) carries the same two conditions in the same colors.
 % The dashed grey line at 1 is the dense-LQR reference -- state that in the
@@ -289,10 +294,16 @@ legend(hb, condNames, 'Location', 'northeast', 'FontSize', legFS);
 ylim([0 ea_params.popSize]);
 grid on; box on;
 
-title(tl, sprintf(['EA-LQR: Baseline vs Gershgorin  ' ...
-    '(Grid %d\\times%d, \\rho(A)=%.2f, %d seeds)'], ...
-    gridSize, gridSize, rho_A, numSeeds), ...
-    'FontSize', 16, 'FontWeight', 'bold');
+% The layout title duplicates the LaTeX caption and costs a band of vertical
+% space, so it is off for the paper export. Set true when the PNG is viewed on
+% its own and needs to carry its own context.
+standaloneTitle = false;
+if standaloneTitle
+    title(tl, sprintf(['EA-LQR: Baseline vs Gershgorin  ' ...
+        '(Grid %d\\times%d, \\rho(A)=%.2f, %d seeds)'], ...
+        gridSize, gridSize, rho_A, numSeeds), ...
+        'FontSize', titFS, 'FontWeight', 'bold');
+end
 
 %% ===================== Save =====================
 if ~exist('results', 'dir'), mkdir('results'); end

@@ -361,7 +361,7 @@ for g = 1:nGrid
 end
 
 %% ===================== Figure 1: Normalized Convergence =====================
-axFS = 18;  labFS = 19;  titFS = 19;  legFS = 15;  lw = 3;
+axFS = 22;  labFS = 24;  titFS = 24;  legFS = 19;  lw = 3;
 cb_ea    = [0.00 0.45 0.74];
 cb_dens  = [0.50 0.50 0.50];
 cb_diag  = [0.85 0.33 0.10];
@@ -373,8 +373,9 @@ ca_ea    = [0.75 0.85 1.00];
 gens = (1:maxGen)';
 
 % 3 panels: nGrid grid systems + 1 Shin 2d-mesh (panel 3 filled after Shin section)
-fig1 = figure('Position', [40 60 2200 820], 'Color', 'w');
-set(fig1, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
+fig1 = figure('Position', [40 60 2100 900], 'Color', 'w');
+set(fig1, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman', ...
+    'DefaultTextFontName', 'Times New Roman', 'DefaultLegendFontName', 'Times New Roman');
 
 for g = 1:nGrid
     subplot(2, nGrid+1, g); hold on;
@@ -407,7 +408,7 @@ for g = 1:nGrid
         hDiag = yline(J_diag_n, '-.', 'Color', cb_diag, 'LineWidth', 2);
     else
         hDiag = plot(NaN, NaN, '-.', 'Color', cb_diag, 'LineWidth', 2);
-        text(maxGen/2, max(mu)*0.9, 'Diag: Unstable', 'Color', cb_diag, ...
+        text(maxGen*0.30, max(mu)*0.62, 'Diag: Unstable', 'Color', cb_diag, ...
             'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
     end
 
@@ -481,35 +482,35 @@ for g = 1:nGrid
 
     % Both searches are plotted against the same budget: the EA spends exactly N_p
 % cost evaluations per generation, and greedy's incumbent is sampled at N_p*g.
-xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
+xlabel('Generation (= evals/{\itN}_p)', 'FontSize', labFS);
     if g == 1
-        ylabel('$J \;/\; J_{\mathrm{dense}}$', 'FontSize', labFS, 'Interpreter', 'latex');
+        ylabel('{\itJ} / {\itJ}_{dense}', 'FontSize', labFS);
     end
-    title(sprintf('(%c) %d$\\times$%d ($n$=%d, $m$=%d)', ...
+    title(sprintf('(%c) %d\\times%d ({\\itn}=%d, {\\itm}=%d)', ...
         char('a'+g-1), gridSizes(g), gridSizes(g), nxVec(g), nuVec(g)), ...
-        'FontSize', titFS, 'Interpreter', 'latex');
+        'FontSize', titFS);
     grid on; box on;
 
     if g == 1 || g == nGrid
         legHandles = [hEA, hGD, hDens, hDiag];
-        legLabels  = {'EA-LQR', 'Greedy', 'Dense ($=1$)', 'Diagonal'};
+        legLabels  = {'EA-LQR', 'Greedy', 'Dense (= 1)', 'Diagonal'};
         if all(trunc_stable_grid(g, :))
             legHandles(end+1) = hTrunc;
-            legLabels{end+1}  = '$\kappa=1$ Trunc.';
+            legLabels{end+1}  = '\kappa = 1 Trunc.';
         end
         if showLB
             legHandles(end+1) = hLB;
             % The bound is over ACTUATOR masks at the current (ell, s), not over
             % all of Theta -- writing "min J_EA" would overstate it.
-            legLabels{end+1}  = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
+            legLabels{end+1}  = 'Certified bound on min_{\bfa} {\itJ}_{EA}';
         end
         legend(legHandles, legLabels, 'Location', 'northeast', ...
-            'FontSize', legFS, 'Interpreter', 'latex');
+            'FontSize', legFS);
     end
 end
 
-sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
-    'FontSize', 16, 'FontWeight', 'bold', 'FontName', 'Times New Roman');
+% No sgtitle: the LaTeX caption states this, and dropping it frees a band of
+% vertical whitespace across the top of the figure.
 
 
 %% ===================== Save =====================
@@ -728,7 +729,8 @@ sd_cg_mesh_diag = nanstd(convGen_mesh_diag);
 
 %% ===================== Figure 2: Scaling Analysis (5x5, 7x7, IEEE13-bus) =====================
 fig2 = figure('Position', [40 520 1500 380], 'Color', 'w');
-set(fig2, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman');
+set(fig2, 'DefaultAxesFontSize', axFS, 'DefaultAxesFontName', 'Times New Roman', ...
+    'DefaultTextFontName', 'Times New Roman', 'DefaultLegendFontName', 'Times New Roman');
 
 % Use categorical positions (1,2,3) because IEEE13 Nx=26 < grid Nx=[50,98]
 xDim     = [1; 2];                       % positions for 5x5 and 7x7
@@ -847,7 +849,7 @@ if J_diag_sh_n < 1e4
     hDiag_sh = yline(J_diag_sh_n, '-.', 'Color', cb_diag, 'LineWidth', 2);
 else
     hDiag_sh = plot(NaN, NaN, '-.', 'Color', cb_diag, 'LineWidth', 2);
-    text(maxGen/2, max(mu_sh)*0.9, 'Diag: Unstable', 'Color', cb_diag, ...
+    text(maxGen*0.30, max(mu_sh)*0.62, 'Diag: Unstable', 'Color', cb_diag, ...
         'FontSize', legFS, 'FontName', 'Times New Roman', 'HorizontalAlignment', 'center');
 end
 
@@ -900,27 +902,27 @@ end
 
 % Both searches are plotted against the same budget: the EA spends exactly N_p
 % cost evaluations per generation, and greedy's incumbent is sampled at N_p*g.
-xlabel('Generation ($=$ evals$/N_p$)', 'FontSize', labFS, 'Interpreter', 'latex');
-title('(c) IEEE 13-bus ($n$=26)', 'FontSize', titFS, 'Interpreter', 'latex');
+xlabel('Generation (= evals/{\itN}_p)', 'FontSize', labFS);
+title('(c) IEEE 13-bus ({\itn}=26)', 'FontSize', titFS);
 legH_sh = [hEA_sh, hGD_sh, hDens_sh];
-legL_sh = {'EA-LQR', 'Greedy', 'Dense ($=1$)'};
+legL_sh = {'EA-LQR', 'Greedy', 'Dense (= 1)'};
 if J_diag_sh_n < 1e4
     legH_sh(end+1) = hDiag_sh;
     legL_sh{end+1} = 'Diagonal';
 end
 if shin_trunc_stable(si_m)
     legH_sh(end+1) = hTrunc_sh;
-    legL_sh{end+1} = sprintf('$\\kappa=%d$ Trunc.', shin_kappa);
+    legL_sh{end+1} = sprintf('\\kappa = %d Trunc.', shin_kappa);
 end
 if showLB
     legH_sh(end+1) = hLB_sh;
-    legL_sh{end+1} = 'Thm.~C bound on $\min_{\mathbf{a}} J_{\mathrm{EA}}$';
+    legL_sh{end+1} = 'Certified bound on min_{\bfa} {\itJ}_{EA}';
 end
-legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS, 'Interpreter', 'latex');
+legend(legH_sh, legL_sh, 'Location', 'northeast', 'FontSize', legFS);
 grid on; box on;
 
-sgtitle('EA-LQR Convergence Normalized by Dense LQR', ...
-    'FontSize', 16, 'FontWeight', 'bold', 'FontName', 'Times New Roman');
+% No sgtitle: the LaTeX caption states this, and dropping it frees a band of
+% vertical whitespace across the top of the figure.
 
 %% ---- Figure 1 row 2: EA Controller Topology Diagrams ----
 figure(fig1);
@@ -1016,8 +1018,8 @@ for g = 1:nGrid
             c_both, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
     end
 
-    title(sprintf('(%c) %d$\\times$%d EA controller', char('d'+g-1), gSz, gSz), ...
-        'FontSize', titFS, 'Interpreter', 'latex');
+    title(sprintf('(%c) %d\\times%d EA controller', char('d'+g-1), gSz, gSz), ...
+        'FontSize', titFS);
 end
 
 % --- Panel (f): IEEE 13-bus EA controller ---
@@ -1094,12 +1096,19 @@ if ~isempty(bothNodes_sh)
         c_both, 'o', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 0.9);
 end
 
-title('(f) IEEE 13-bus EA controller', 'FontSize', titFS, 'Interpreter', 'latex');
+title('(f) IEEE 13-bus EA controller', 'FontSize', titFS);
 legend([s1, s2, s3, s4], {'Inactive', 'Sensor', 'Actuator', 'Both'}, ...
     'Location', 'best', 'FontSize', legFS);
 
-exportgraphics(fig1, fullfile(outDir, 'perf_bounds_convergence.pdf'), 'ContentType', 'vector');
-saveas(fig1, fullfile(outDir, 'perf_bounds_convergence.png'));
+% Shrink each visible axes to its own TightInset. subplot() reserves a generous
+% fixed margin around every panel for labels that are mostly not there; this
+% reclaims it. The topology diagrams in row 2 are 'axis equal off', so their
+% TightInset is degenerate -- skip them, or they collapse.
+compact_axes(fig1);
+
+exportgraphics(fig1, fullfile(outDir, 'perf_bounds_convergence.pdf'), ...
+    'ContentType', 'vector', 'BackgroundColor', 'white');
+exportgraphics(fig1, fullfile(outDir, 'perf_bounds_convergence.png'), 'Resolution', 200);
 fprintf('Figure 1 (3-panel with 2d-mesh) saved → %s/perf_bounds_convergence.*\n', outDir);
 
 
@@ -1144,4 +1153,26 @@ function [J_total, J_perf, J_struct] = cost_decompose(A, B, Q, R, K, costBM, alp
     w_col  = 0.2  * (1 - alpha);
     J_struct = w_comm * nnz(K) + w_row * nnz(any(K,2)) + w_col * nnz(any(K,1));
     J_total  = J_perf + J_struct;
+end
+
+function compact_axes(fig)
+% Reclaim the fixed padding subplot() reserves around each panel by shrinking
+% every visible axes towards its own TightInset. Axes turned off (the topology
+% diagrams of row 2) are skipped: their TightInset is degenerate and the rescale
+% would collapse them.
+%
+% Two details that are easy to get wrong. TightInset is stale until the text
+% objects have actually been laid out, so drawnow first or the labels get
+% clipped. And TightInset alone leaves zero clearance, which puts row 1's
+% xlabel straight onto row 2's title -- hence the extra bottom pad.
+drawnow;
+pad = [0.004 0.028 0.004 0.012];   % [left bottom right top], normalized
+axAll = findobj(fig, 'Type', 'axes');
+for k = 1:numel(axAll)
+    a = axAll(k);
+    if ~strcmp(get(a, 'Visible'), 'on'), continue; end
+    ti = get(a, 'TightInset');
+    if any(~isfinite(ti)) || all(ti == 0), continue; end
+    set(a, 'LooseInset', ti + pad);
+end
 end
